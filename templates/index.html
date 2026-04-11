@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FieldInsight — Ops Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --sidebar-bg: #111827; --sidebar-hover: #1f2937; --sidebar-active: #1e3a5f;
+      --accent: #0ea5e9; --accent-hover: #0284c7; --accent-glow: #0ea5e915;
+      --teal: #06b6d4; --green: #10b981; --amber: #f59e0b; --red: #ef4444;
+      --purple: #8b5cf6; --orange: #f97316;
+      --bg: #f0f4f8; --card: #ffffff; --border: #e2e8f0;
+      --text-primary: #0f172a; --text-secondary: #475569; --text-muted: #94a3b8;
+      --sidebar-text: #6b7280; --sidebar-text-active: #f9fafb;
+      --tier-a: #10b981; --tier-b: #3b82f6; --tier-c: #f59e0b; --tier-x: #ef4444;
+    }
+    html, body { height: 100%; font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--text-primary); }
+    .layout { display: flex; min-height: 100vh; }
+
+    /* ── SIDEBAR ── */
+    .sidebar { width: 224px; flex-shrink: 0; background: var(--sidebar-bg); display: flex; flex-direction: column; border-right: 1px solid #1f2937; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+    .sidebar-logo { padding: 20px 16px 16px; border-bottom: 1px solid #1f2937; }
+    .logo-mark { width: 36px; height: 36px; background: linear-gradient(135deg, #0ea5e9, #3b82f6); border-radius: 9px; display: flex; align-items: center; justify-content: center; font-weight: 800; color: #fff; font-size: 16px; margin-bottom: 10px; }
+    .logo-name { font-size: 15px; font-weight: 800; color: #f9fafb; letter-spacing: -0.3px; }
+    .logo-sub { font-size: 10px; font-weight: 600; color: var(--sidebar-text); letter-spacing: 0.8px; text-transform: uppercase; margin-top: 1px; }
+    .sidebar-section { padding: 16px 8px 8px; }
+    .sidebar-label { font-size: 10px; font-weight: 700; color: #4b5563; letter-spacing: 0.8px; text-transform: uppercase; padding: 0 8px; margin-bottom: 6px; }
+    .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; cursor: pointer; color: var(--sidebar-text); font-size: 13px; font-weight: 500; transition: all 0.15s; text-decoration: none; margin-bottom: 2px; border: none; background: none; width: 100%; text-align: left; }
+    .nav-item:hover { background: var(--sidebar-hover); color: #d1d5db; }
+    .nav-item.active { background: var(--sidebar-active); color: var(--sidebar-text-active); font-weight: 700; }
+    .nav-icon { font-size: 15px; width: 20px; text-align: center; flex-shrink: 0; }
+    .nav-badge { margin-left: auto; background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 10px; }
+    .sidebar-footer { margin-top: auto; padding: 12px 16px; border-top: 1px solid #1f2937; font-size: 11px; color: #4b5563; }
+
+    /* ── MAIN ── */
+    .main { flex: 1; overflow-y: auto; }
+    .page { display: none; flex-direction: column; min-height: 100vh; }
+    .page.active { display: flex; }
+    .page-header { background: var(--card); border-bottom: 1px solid var(--border); padding: 20px 28px; display: flex; align-items: center; justify-content: space-between; gap: 16px; position: sticky; top: 0; z-index: 10; }
+    .page-eyebrow { font-size: 11px; font-weight: 600; color: var(--text-muted); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 4px; }
+    .page-title { font-size: 20px; font-weight: 800; color: var(--text-primary); letter-spacing: -0.5px; }
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .btn { padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; display: flex; align-items: center; gap: 6px; font-family: 'Manrope', sans-serif; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border); }
+    .btn-ghost:hover { background: var(--bg); }
+    .updated-badge { font-size: 11px; color: var(--text-muted); }
+    .page-content { padding: 24px 28px; flex: 1; }
+
+    /* ── KPI CARDS ── */
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; margin-bottom: 24px; }
+    .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; position: relative; overflow: hidden; }
+    .kpi::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+    .kpi.blue::before { background: var(--accent); }
+    .kpi.green::before { background: var(--green); }
+    .kpi.amber::before { background: var(--amber); }
+    .kpi.red::before { background: var(--red); }
+    .kpi.purple::before { background: var(--purple); }
+    .kpi.teal::before { background: var(--teal); }
+    .kpi-label { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .kpi-value { font-size: 28px; font-weight: 800; color: var(--text-primary); letter-spacing: -1px; font-family: 'DM Mono', monospace; }
+    .kpi-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+    /* ── CARDS ── */
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .card-title { font-size: 14px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
+    .card-subtitle { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+
+    /* ── TABLES ── */
+    .fi-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .fi-table th { font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 0 10px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+    .fi-table th.right, .fi-table td.right { text-align: right; }
+    .fi-table td { padding: 11px 10px; border-bottom: 1px solid #f1f5f9; color: var(--text-secondary); vertical-align: middle; }
+    .fi-table tr:last-child td { border-bottom: none; }
+    .fi-table tr:hover td { background: #f8fafc; }
+    .fi-table .mono { font-family: 'DM Mono', monospace; font-size: 12px; }
+    .fi-table .bold { font-weight: 700; color: var(--text-primary); }
+    .fi-table .muted { color: var(--text-muted); }
+
+    /* ── TIER BADGES ── */
+    .tier { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 6px; font-size: 12px; font-weight: 800; }
+    .tier-A { background: #d1fae5; color: #059669; }
+    .tier-B { background: #dbeafe; color: #2563eb; }
+    .tier-C { background: #fef3c7; color: #d97706; }
+    .tier-X { background: #fee2e2; color: #dc2626; }
+    .tier-empty { background: #f1f5f9; color: #94a3b8; }
+
+    /* ── PROGRESS / BAR ── */
+    .pct-bar { height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+    .pct-fill { height: 100%; border-radius: 3px; transition: width 0.5s; }
+    .pct-fill.green { background: var(--green); }
+    .pct-fill.amber { background: var(--amber); }
+    .pct-fill.red { background: var(--red); }
+    .pct-fill.blue { background: var(--accent); }
+
+    /* ── RESEARCHER TABLE ROWS ── */
+    .researcher-row td:first-child { font-weight: 700; color: var(--text-primary); }
+    .pct-cell { white-space: nowrap; }
+    .pct-num { font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 600; }
+    .good { color: var(--green); }
+    .warn { color: var(--amber); }
+    .bad  { color: var(--red); }
+
+    /* ── STAGE BREAKDOWN ── */
+    .stage-list { list-style: none; }
+    .stage-item { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid #f1f5f9; }
+    .stage-item:last-child { border-bottom: none; }
+    .stage-name { font-size: 13px; color: var(--text-secondary); flex: 1; }
+    .stage-count { font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 600; color: var(--text-primary); min-width: 40px; text-align: right; }
+    .stage-pct { font-size: 11px; color: var(--text-muted); min-width: 36px; text-align: right; }
+    .stage-bar-wrap { width: 80px; }
+    .stage-bar { height: 4px; border-radius: 2px; }
+
+    /* ── WON DEALS LIST ── */
+    .won-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #f1f5f9; }
+    .won-item:last-child { border-bottom: none; }
+    .won-avatar { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, var(--green), var(--teal)); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; color: #fff; flex-shrink: 0; }
+    .won-name { font-size: 13px; font-weight: 700; color: var(--text-primary); }
+    .won-meta { font-size: 11px; color: var(--text-muted); }
+    .won-date { margin-left: auto; font-size: 11px; font-family: 'DM Mono', monospace; color: var(--text-muted); white-space: nowrap; }
+
+    /* ── FUNNEL ── */
+    .funnel { display: flex; flex-direction: column; gap: 8px; }
+    .funnel-row { display: flex; align-items: center; gap: 12px; }
+    .funnel-label { font-size: 12px; color: var(--text-secondary); width: 140px; flex-shrink: 0; }
+    .funnel-bar-wrap { flex: 1; }
+    .funnel-bar { height: 24px; border-radius: 6px; background: linear-gradient(135deg, var(--accent), var(--teal)); display: flex; align-items: center; padding: 0 10px; transition: width 0.5s; min-width: 32px; }
+    .funnel-count { font-size: 12px; font-weight: 700; color: #fff; font-family: 'DM Mono', monospace; }
+
+    /* ── LOADING / ERROR ── */
+    .loading { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px; color: var(--text-muted); gap: 12px; }
+    .spinner { width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-box { background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: 16px; color: #dc2626; font-size: 13px; }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 900px) {
+      .sidebar { width: 200px; }
+      .two-col, .three-col { grid-template-columns: 1fr; }
+      .page-content { padding: 16px; }
+    }
+    @media (max-width: 640px) {
+      .sidebar { display: none; }
+      .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ── SIDEBAR ── -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-mark">FI</div>
+      <div class="logo-name">FieldInsight</div>
+      <div class="logo-sub">OPS DASHBOARD · v1.0</div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Pipeline</div>
+      <button class="nav-item active" onclick="showPage('pipeline')">
+        <span class="nav-icon">🔍</span> Pipeline Quality
+      </button>
+      <button class="nav-item" onclick="showPage('researchers')">
+        <span class="nav-icon">🔬</span> Researcher Review
+      </button>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Sales</div>
+      <button class="nav-item" onclick="showPage('sdr')">
+        <span class="nav-icon">📞</span> SDR Review
+      </button>
+      <button class="nav-item" onclick="showPage('ae')">
+        <span class="nav-icon">🏆</span> AE Review
+      </button>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Customers</div>
+      <button class="nav-item" onclick="showPage('onboarding')">
+        <span class="nav-icon">🚀</span> Onboarding
+      </button>
+    </div>
+
+    <div class="sidebar-footer">
+      Built by Alfred · FI-OPS<br>
+      Data: HubSpot + Sheets
+    </div>
+  </nav>
+
+  <!-- ── MAIN CONTENT ── -->
+  <div class="main">
+
+    <!-- ════════════════════════════════════════════
+         PAGE 1: PIPELINE QUALITY
+    ════════════════════════════════════════════ -->
+    <div class="page active" id="page-pipeline">
+      <div class="page-header">
+        <div>
+          <div class="page-eyebrow">Pipeline · Tim + Jay · HubSpot</div>
+          <div class="page-title">Pipeline Quality Audit</div>
+        </div>
+        <div class="header-actions">
+          <span class="updated-badge" id="pipeline-updated">—</span>
+          <button class="btn btn-ghost" onclick="reload('pipeline')">↺ Refresh</button>
+        </div>
+      </div>
+      <div class="page-content" id="pipeline-content">
+        <div class="loading"><div class="spinner"></div><span>Loading pipeline data…</span></div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════
+         PAGE 2: RESEARCHER REVIEW
+    ════════════════════════════════════════════ -->
+    <div class="page" id="page-researchers">
+      <div class="page-header">
+        <div>
+          <div class="page-eyebrow">Research Team · 2026 SDR + HubSpot</div>
+          <div class="page-title">Researcher Review</div>
+        </div>
+        <div class="header-actions">
+          <span class="updated-badge" id="researchers-updated">—</span>
+          <button class="btn btn-ghost" onclick="reload('researchers')">↺ Refresh</button>
+        </div>
+      </div>
+      <div class="page-content" id="researchers-content">
+        <div class="loading"><div class="spinner"></div><span>Loading researcher data…</span></div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════
+         PAGE 3: SDR REVIEW
+    ════════════════════════════════════════════ -->
+    <div class="page" id="page-sdr">
+      <div class="page-header">
+        <div>
+          <div class="page-eyebrow">SDR Team · Tim · Jay · Natasha</div>
+          <div class="page-title">SDR Review</div>
+        </div>
+        <div class="header-actions">
+          <span class="updated-badge" id="sdr-updated">—</span>
+          <button class="btn btn-ghost" onclick="reload('sdr')">↺ Refresh</button>
+        </div>
+      </div>
+      <div class="page-content" id="sdr-content">
+        <div class="loading"><div class="spinner"></div><span>Loading SDR data…</span></div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════
+         PAGE 4: AE REVIEW
+    ════════════════════════════════════════════ -->
+    <div class="page" id="page-ae">
+      <div class="page-header">
+        <div>
+          <div class="page-eyebrow">Sales · Natasha · Main Pipeline</div>
+          <div class="page-title">AE Review</div>
+        </div>
+        <div class="header-actions">
+          <span class="updated-badge" id="ae-updated">—</span>
+          <button class="btn btn-ghost" onclick="reload('ae')">↺ Refresh</button>
+        </div>
+      </div>
+      <div class="page-content" id="ae-content">
+        <div class="loading"><div class="spinner"></div><span>Loading sales data…</span></div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════════════
+         PAGE 5: ONBOARDING
+    ════════════════════════════════════════════ -->
+    <div class="page" id="page-onboarding">
+      <div class="page-header">
+        <div>
+          <div class="page-eyebrow">Customer Success · Onboarding Pipeline</div>
+          <div class="page-title">Onboarding Review</div>
+        </div>
+        <div class="header-actions">
+          <span class="updated-badge" id="onboarding-updated">—</span>
+          <button class="btn btn-ghost" onclick="reload('onboarding')">↺ Refresh</button>
+        </div>
+      </div>
+      <div class="page-content" id="onboarding-content">
+        <div class="loading"><div class="spinner"></div><span>Loading onboarding data…</span></div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /layout -->
+
+<script>
+const API_KEY = "{{ dashboard_secret }}";
+const apiUrl = (path, force) => {
+  const q = new URLSearchParams();
+  if (API_KEY) q.set("key", API_KEY);
+  if (force)   q.set("force","1");
+  return `/api/${path}?${q}`;
+};
+
+// ── Navigation ──────────────────────────────────────────────────────────────
+const loaded = {};
+
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  event.currentTarget.classList.add('active');
+  if (!loaded[name]) loadPage(name);
+}
+
+function reload(name) {
+  loaded[name] = false;
+  document.getElementById(name + '-content').innerHTML = '<div class="loading"><div class="spinner"></div><span>Refreshing…</span></div>';
+  loadPage(name, true);
+}
+
+function loadPage(name, force=false) {
+  const endpointMap = {
+    pipeline:    'pipeline-quality',
+    researchers: 'researchers',
+    sdr:         'sdr',
+    ae:          'sales',
+    onboarding:  'onboarding',
+  };
+  const endpoint = endpointMap[name];
+  fetch(apiUrl(endpoint, force))
+    .then(r => r.json())
+    .then(res => {
+      if (!res.ok) throw new Error(res.error || 'API error');
+      loaded[name] = true;
+      renderPage(name, res.data);
+    })
+    .catch(err => {
+      document.getElementById(name + '-content').innerHTML =
+        `<div class="error-box">⚠️ Failed to load data: ${err.message}</div>`;
+    });
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+const fmtPct = n => `${n}%`;
+const pctClass = (n, good=60, warn=40) => n >= good ? 'good' : n >= warn ? 'warn' : 'bad';
+const tierBadge = t => t ? `<span class="tier tier-${t}">${t}</span>` : `<span class="tier tier-empty">—</span>`;
+const pctBar = (n, cls='blue') =>
+  `<div class="pct-bar"><div class="pct-fill ${cls}" style="width:${Math.min(n,100)}%"></div></div>`;
+
+function initials(name) {
+  return (name||'?').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+}
+
+const AVATAR_COLORS = [
+  'linear-gradient(135deg,#0ea5e9,#3b82f6)',
+  'linear-gradient(135deg,#10b981,#06b6d4)',
+  'linear-gradient(135deg,#8b5cf6,#a78bfa)',
+  'linear-gradient(135deg,#f59e0b,#f97316)',
+  'linear-gradient(135deg,#ef4444,#f97316)',
+  'linear-gradient(135deg,#06b6d4,#3b82f6)',
+];
+function avatarColor(name) {
+  let h = 0; for (let c of (name||'')) h = (h*31 + c.charCodeAt(0)) & 0xffff;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+
+// ── RENDER: Pipeline Quality ─────────────────────────────────────────────────
+function renderPage(name, data) {
+  document.getElementById(name+'-updated').textContent = data.updated_at || '';
+  const fn = {
+    pipeline:    renderPipeline,
+    researchers: renderResearchers,
+    sdr:         renderSDR,
+    ae:          renderAE,
+    onboarding:  renderOnboarding,
+  }[name];
+  if (fn) fn(data);
+}
+
+function renderPipeline(data) {
+  const s = data.summary;
+  const noMobCls = pctClass(100 - s.no_mobile_pct, 80, 60);
+
+  let html = `
+  <div class="kpi-grid">
+    <div class="kpi blue"><div class="kpi-label">Total Deals</div><div class="kpi-value">${s.total.toLocaleString()}</div><div class="kpi-sub">Tim + Jay pipelines</div></div>
+    <div class="kpi teal"><div class="kpi-label">Active</div><div class="kpi-value">${s.active.toLocaleString()}</div><div class="kpi-sub">${Math.round(s.active/s.total*100)}% of pipeline</div></div>
+    <div class="kpi amber"><div class="kpi-label">No Mobile</div><div class="kpi-value">${s.no_mobile}</div><div class="kpi-sub">${s.no_mobile_pct}% of total</div></div>
+    <div class="kpi green"><div class="kpi-label">Demo Booked</div><div class="kpi-value">${s.demo_booked}</div><div class="kpi-sub">${Math.round(s.demo_booked/s.active*100)||0}% demo rate</div></div>
+    <div class="kpi purple"><div class="kpi-label">Won</div><div class="kpi-value">${s.won}</div><div class="kpi-sub">From this pipeline</div></div>
+    <div class="kpi red"><div class="kpi-label">Disqualified</div><div class="kpi-value">${s.disqualified}</div><div class="kpi-sub">${Math.round(s.disqualified/s.total*100)}% of total</div></div>
+  </div>
+
+  <div class="two-col">
+    <!-- Researcher Scorecard -->
+    <div class="card" style="grid-column: 1 / -1">
+      <div class="card-header">
+        <div>
+          <div class="card-title">📊 Researcher Scorecard</div>
+          <div class="card-subtitle">Lead quality by researcher · sourced from HubSpot researcher_for_lead field</div>
+        </div>
+      </div>
+      <table class="fi-table">
+        <thead>
+          <tr>
+            <th>Researcher</th>
+            <th class="right">Leads</th>
+            <th class="right">Active</th>
+            <th class="right">Phone%</th>
+            <th class="right">ICP A+B%</th>
+            <th class="right">Demos</th>
+            <th class="right">Won</th>
+            <th class="right">Win%</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+  for (const r of data.by_researcher) {
+    const phoneCls = pctClass(r.phone_pct, 75, 50);
+    const icpCls   = pctClass(r.icp_pct, 60, 40);
+    html += `
+          <tr class="researcher-row">
+            <td class="bold">${r.name}</td>
+            <td class="right mono">${r.total}</td>
+            <td class="right mono">${r.active}</td>
+            <td class="right pct-cell"><span class="pct-num ${phoneCls}">${r.phone_pct}%</span></td>
+            <td class="right pct-cell"><span class="pct-num ${icpCls}">${r.icp_pct}%</span></td>
+            <td class="right mono">${r.demos}</td>
+            <td class="right mono">${r.won}</td>
+            <td class="right pct-cell"><span class="pct-num ${pctClass(r.win_rate,5,2)}">${r.win_rate}%</span></td>
+          </tr>`;
+  }
+
+  html += `</tbody></table></div></div>
+
+  <div class="two-col">
+    <!-- Stage Breakdown -->
+    <div class="card">
+      <div class="card-header"><div class="card-title">📈 Stage Breakdown</div></div>
+      <ul class="stage-list">`;
+
+  const totalDeals = s.total;
+  for (const [stage, count] of Object.entries(data.stage_counts)) {
+    const pct = Math.round(count/totalDeals*100);
+    const isGood = stage.includes('Demo') || stage.includes('Follow');
+    const isBad  = stage.includes('OFF') || stage.includes('Dead') || stage.includes('Overseas');
+    const barCls = isGood ? 'background:var(--green)' : isBad ? 'background:var(--red)' : 'background:var(--accent)';
+    html += `<li class="stage-item">
+      <span class="stage-name">${stage}</span>
+      <div class="stage-bar-wrap"><div class="stage-bar" style="${barCls};width:${Math.min(pct*3,100)}%"></div></div>
+      <span class="stage-count">${count}</span>
+      <span class="stage-pct">${pct}%</span>
+    </li>`;
+  }
+
+  html += `</ul></div>
+
+    <!-- WON Companies -->
+    <div class="card">
+      <div class="card-header"><div class="card-title">🏆 Won Companies <span style="font-size:12px;font-weight:400;color:var(--text-muted);margin-left:6px">${data.won_deals.length} total</span></div></div>`;
+
+  if (data.won_deals.length === 0) {
+    html += `<p style="color:var(--text-muted);font-size:13px">No WON companies found yet.</p>`;
+  } else {
+    for (const d of data.won_deals.slice(0,12)) {
+      const ini = initials(d.company);
+      html += `<div class="won-item">
+        <div class="won-avatar" style="background:${avatarColor(d.company)}">${ini}</div>
+        <div>
+          <div class="won-name">${d.company}</div>
+          <div class="won-meta">${d.researcher || '—'} → ${d.sdr_demo || d.sdr} · ${d.won_pipeline || ''}</div>
+        </div>
+        <div class="won-date">${d.won_at || '—'}</div>
+      </div>`;
+    }
+  }
+
+  html += `</div></div>`;
+  document.getElementById('pipeline-content').innerHTML = html;
+}
+
+// ── RENDER: Researcher Review ────────────────────────────────────────────────
+function renderResearchers(data) {
+  if (data.error) {
+    document.getElementById('researchers-content').innerHTML = `<div class="error-box">⚠️ ${data.error}</div>`;
+    return;
+  }
+
+  let html = `
+  <div class="kpi-grid">`;
+  let totalLeads=0, totalDials=0, totalConnects=0, totalDemos=0;
+  for (const r of data.totals) {
+    totalLeads+=r.leads; totalDials+=r.dials; totalConnects+=r.connects; totalDemos+=r.demos;
+  }
+  html += `
+    <div class="kpi blue"><div class="kpi-label">Total Leads</div><div class="kpi-value">${totalLeads.toLocaleString()}</div><div class="kpi-sub">${data.date_range}</div></div>
+    <div class="kpi teal"><div class="kpi-label">Total Dials</div><div class="kpi-value">${totalDials.toLocaleString()}</div><div class="kpi-sub">All researchers</div></div>
+    <div class="kpi green"><div class="kpi-label">Connects</div><div class="kpi-value">${totalConnects}</div><div class="kpi-sub">${totalDials ? Math.round(totalConnects/totalDials*100) : 0}% connect rate</div></div>
+    <div class="kpi purple"><div class="kpi-label">Demos Set</div><div class="kpi-value">${totalDemos}</div><div class="kpi-sub">${totalConnects ? Math.round(totalDemos/totalConnects*100) : 0}% from connects</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><div class="card-title">🔬 Researcher Performance (All Time)</div></div>
+    <table class="fi-table">
+      <thead>
+        <tr>
+          <th>Researcher</th>
+          <th class="right">Days</th>
+          <th class="right">Leads</th>
+          <th class="right">Dials</th>
+          <th class="right">Emails</th>
+          <th class="right">Connects</th>
+          <th class="right">Connect%</th>
+          <th class="right">Demos</th>
+          <th class="right">Demo%</th>
+        </tr>
+      </thead>
+      <tbody>`;
+
+  for (const r of data.totals) {
+    html += `<tr class="researcher-row">
+      <td class="bold">${r.name}</td>
+      <td class="right mono muted">${r.days}</td>
+      <td class="right mono">${r.leads}</td>
+      <td class="right mono">${r.dials}</td>
+      <td class="right mono">${r.emails}</td>
+      <td class="right mono">${r.connects}</td>
+      <td class="right"><span class="pct-num ${pctClass(r.connect_rate,30,15)}">${r.connect_rate}%</span></td>
+      <td class="right mono">${r.demos}</td>
+      <td class="right"><span class="pct-num ${pctClass(r.demo_rate,20,10)}">${r.demo_rate}%</span></td>
+    </tr>`;
+  }
+
+  html += `</tbody></table></div>
+
+  <div class="card">
+    <div class="card-header"><div class="card-title">📅 Recent Activity (Last 5 Days)</div></div>
+    <table class="fi-table">
+      <thead><tr><th>Date</th><th>Rep</th><th class="right">Leads</th><th class="right">Dials</th><th class="right">Emails</th><th class="right">Connects</th><th class="right">Demos</th></tr></thead>
+      <tbody>`;
+
+  for (const r of data.recent.slice().reverse().slice(0,30)) {
+    html += `<tr>
+      <td class="muted mono">${r.date}</td>
+      <td class="bold">${r.rep}</td>
+      <td class="right mono">${r.leads||'—'}</td>
+      <td class="right mono">${r.dials||'—'}</td>
+      <td class="right mono">${r.emails||'—'}</td>
+      <td class="right mono">${r.connects||'—'}</td>
+      <td class="right mono">${r.demos||'—'}</td>
+    </tr>`;
+  }
+
+  html += `</tbody></table></div>`;
+  document.getElementById('researchers-content').innerHTML = html;
+}
+
+// ── RENDER: SDR Review ───────────────────────────────────────────────────────
+function renderSDR(data) {
+  const hs = data.hs_pipeline;
+
+  let html = `<div class="two-col">`;
+
+  for (const [sdr, pip] of Object.entries(hs)) {
+    html += `<div class="card">
+      <div class="card-header"><div class="card-title">📞 ${sdr}'s Pipeline</div></div>
+      <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
+        <div class="kpi blue" style="padding:12px"><div class="kpi-label">Total</div><div class="kpi-value" style="font-size:22px">${pip.total.toLocaleString()}</div></div>
+        <div class="kpi green" style="padding:12px"><div class="kpi-label">Demo Booked</div><div class="kpi-value" style="font-size:22px">${pip.demo_booked}</div><div class="kpi-sub">${pip.demo_rate_pct}% rate</div></div>
+        <div class="kpi amber" style="padding:12px"><div class="kpi-label">No Mobile</div><div class="kpi-value" style="font-size:22px">${pip.no_mobile}</div><div class="kpi-sub">${Math.round(pip.no_mobile/pip.total*100)||0}%</div></div>
+      </div>
+      <ul class="stage-list">
+        <li class="stage-item"><span class="stage-name">Not Contacted</span><span class="stage-count">${pip.not_contacted}</span></li>
+        <li class="stage-item"><span class="stage-name">1st Cold Call Made</span><span class="stage-count">${pip.called}</span></li>
+        <li class="stage-item"><span class="stage-name">Unable to Reach</span><span class="stage-count">${pip.unable_to_reach}</span></li>
+        <li class="stage-item"><span class="stage-name" style="color:var(--green);font-weight:700">⭐ Demo Booked</span><span class="stage-count" style="color:var(--green)">${pip.demo_booked}</span></li>
+        <li class="stage-item"><span class="stage-name">Future Follow Up</span><span class="stage-count">${pip.future_followup}</span></li>
+        <li class="stage-item"><span class="stage-name" style="color:var(--red)">Disqualified</span><span class="stage-count" style="color:var(--red)">${pip.disqualified}</span></li>
+      </ul>
+      <div style="margin-top:12px">
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Phone quality (active deals with mobile)</div>
+        ${pctBar(pip.phone_quality_pct, pip.phone_quality_pct>=75?'green':pip.phone_quality_pct>=50?'':'amber')}
+        <div style="font-size:12px;font-weight:700;color:var(--text-secondary);margin-top:4px">${pip.phone_quality_pct}%</div>
+      </div>
+    </div>`;
+  }
+
+  html += `</div>`;
+
+  if (data.call_activity && data.call_activity.length) {
+    html += `<div class="card">
+      <div class="card-header"><div class="card-title">📊 SDR Call Activity (Kyle Tracking)</div></div>
+      <table class="fi-table">
+        <thead><tr><th>SDR</th><th class="right">Days</th><th class="right">Dials</th><th class="right">Connects</th><th class="right">Connect%</th><th class="right">Demos</th><th class="right">Demo%</th></tr></thead>
+        <tbody>`;
+    for (const r of data.call_activity) {
+      html += `<tr class="researcher-row">
+        <td class="bold">${r.name}</td>
+        <td class="right mono muted">${r.days}</td>
+        <td class="right mono">${r.dials}</td>
+        <td class="right mono">${r.connects}</td>
+        <td class="right"><span class="pct-num ${pctClass(r.connect_rate,20,10)}">${r.connect_rate}%</span></td>
+        <td class="right mono">${r.demos}</td>
+        <td class="right"><span class="pct-num ${pctClass(r.demo_rate,20,10)}">${r.demo_rate}%</span></td>
+      </tr>`;
+    }
+    html += `</tbody></table></div>`;
+  }
+
+  if (data.recent_activity && data.recent_activity.length) {
+    html += `<div class="card">
+      <div class="card-header"><div class="card-title">📅 Recent SDR Activity</div></div>
+      <table class="fi-table">
+        <thead><tr><th>Date</th><th>Rep</th><th class="right">Dials</th><th class="right">Connects</th><th class="right">Demos</th></tr></thead>
+        <tbody>`;
+    for (const r of data.recent_activity.slice().reverse().slice(0,25)) {
+      html += `<tr><td class="muted mono">${r.date}</td><td class="bold">${r.rep}</td>
+        <td class="right mono">${r.dials||'—'}</td><td class="right mono">${r.connects||'—'}</td><td class="right mono">${r.demos||'—'}</td></tr>`;
+    }
+    html += `</tbody></table></div>`;
+  }
+
+  document.getElementById('sdr-content').innerHTML = html;
+}
+
+// ── RENDER: AE Review ────────────────────────────────────────────────────────
+function renderAE(data) {
+  const s = data.summary;
+  let html = `
+  <div class="kpi-grid">
+    <div class="kpi blue"><div class="kpi-label">Active Deals</div><div class="kpi-value">${s.active_count}</div><div class="kpi-sub">In pipeline</div></div>
+    <div class="kpi green"><div class="kpi-label">Won (all time)</div><div class="kpi-value">${s.won_count}</div></div>
+    <div class="kpi teal"><div class="kpi-label">Won (30 days)</div><div class="kpi-value">${s.won_30d}</div></div>
+    <div class="kpi red"><div class="kpi-label">Lost</div><div class="kpi-value">${s.lost_count}</div></div>
+  </div>
+
+  <div class="two-col">
+    <!-- Funnel -->
+    <div class="card">
+      <div class="card-header"><div class="card-title">🔽 Pipeline Funnel</div></div>
+      <div class="funnel">`;
+
+  const maxCount = Math.max(...data.funnel.map(f => f.count), 1);
+  for (const f of data.funnel) {
+    const w = Math.round(f.count / maxCount * 100);
+    html += `<div class="funnel-row">
+      <div class="funnel-label">${f.stage}</div>
+      <div class="funnel-bar-wrap">
+        <div class="funnel-bar" style="width:${w}%">
+          <span class="funnel-count">${f.count}</span>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  html += `</div></div>
+
+    <!-- Recent Wins -->
+    <div class="card">
+      <div class="card-header"><div class="card-title">🏆 Recent Wins</div></div>`;
+
+  for (const d of data.won.slice(0,12)) {
+    const ini = initials(d.name.replace(' - New Deal',''));
+    html += `<div class="won-item">
+      <div class="won-avatar" style="background:${avatarColor(d.name)}">${ini}</div>
+      <div>
+        <div class="won-name">${d.name.replace(' - New Deal','')}</div>
+        <div class="won-meta">${d.pipeline}</div>
+      </div>
+      <div class="won-date">${d.close_date || '—'}</div>
+    </div>`;
+  }
+
+  html += `</div></div>
+
+  <!-- Active deals table -->
+  <div class="card" style="grid-column:1/-1">
+    <div class="card-header"><div class="card-title">📋 Active Deals (${data.active.length})</div></div>
+    <table class="fi-table">
+      <thead><tr><th>Deal</th><th>Stage</th><th>Pipeline</th><th class="right">Created</th></tr></thead>
+      <tbody>`;
+
+  for (const d of data.active.slice(0,30)) {
+    const isHot = d.stage.includes('WIP') || d.stage.includes('Proposal') || d.stage.includes('Demo Attended');
+    html += `<tr>
+      <td class="bold">${d.name.replace(' - New Deal','')}</td>
+      <td><span style="color:${isHot?'var(--green)':'var(--text-secondary)'};font-weight:${isHot?700:400}">${d.stage}</span></td>
+      <td class="muted">${d.pipeline}</td>
+      <td class="right mono muted">${d.created}</td>
+    </tr>`;
+  }
+
+  html += `</tbody></table></div>`;
+  document.getElementById('ae-content').innerHTML = html;
+}
+
+// ── RENDER: Onboarding ───────────────────────────────────────────────────────
+function renderOnboarding(data) {
+  if (data.error) {
+    document.getElementById('onboarding-content').innerHTML = `<div class="error-box">⚠️ ${data.error}</div>`;
+    return;
+  }
+
+  let html = `
+  <div class="kpi-grid">
+    <div class="kpi blue"><div class="kpi-label">Total Customers</div><div class="kpi-value">${data.total}</div></div>
+    <div class="kpi red"><div class="kpi-label">At Risk</div><div class="kpi-value">${data.at_risk.length}</div></div>`;
+
+  for (const [phase, count] of Object.entries(data.phase_counts).slice(0,4)) {
+    html += `<div class="kpi teal"><div class="kpi-label">${phase||'Unknown'}</div><div class="kpi-value">${count}</div></div>`;
+  }
+
+  html += `</div>`;
+
+  if (data.at_risk.length) {
+    html += `<div class="card" style="border-color:#fecaca">
+      <div class="card-header"><div class="card-title" style="color:var(--red)">⚠️ At-Risk Customers</div></div>
+      <table class="fi-table"><thead><tr>`;
+    if (data.at_risk[0]) {
+      for (const col of Object.keys(data.at_risk[0]).slice(0,6)) {
+        html += `<th>${col}</th>`;
+      }
+    }
+    html += `</tr></thead><tbody>`;
+    for (const c of data.at_risk) {
+      html += '<tr>' + Object.values(c).slice(0,6).map(v=>`<td>${v||'—'}</td>`).join('') + '</tr>';
+    }
+    html += `</tbody></table></div>`;
+  }
+
+  html += `<div class="card">
+    <div class="card-header"><div class="card-title">🚀 All Onboarding Customers</div></div>
+    <table class="fi-table"><thead><tr>`;
+
+  if (data.customers[0]) {
+    for (const col of Object.keys(data.customers[0]).slice(0,7)) {
+      html += `<th>${col}</th>`;
+    }
+  }
+  html += `</tr></thead><tbody>`;
+  for (const c of data.customers) {
+    html += '<tr>' + Object.values(c).slice(0,7).map(v=>`<td>${v||'—'}</td>`).join('') + '</tr>';
+  }
+  html += `</tbody></table></div>`;
+
+  document.getElementById('onboarding-content').innerHTML = html;
+}
+
+// ── Auto-load first page on init ─────────────────────────────────────────────
+loadPage('pipeline');
+</script>
+</body>
+</html>

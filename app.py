@@ -56,19 +56,44 @@ def _bust_cache(key: str):
 # ── HubSpot client ────────────────────────────────────────────────────────────
 
 HS_BASE = "https://api.hubapi.com"
+# 6-month lookback (milliseconds epoch) applied to all deal searches
+LOOKBACK_MONTHS = int(os.getenv("LOOKBACK_MONTHS", "6"))
 
 def _hs_headers():
     return {"Authorization": f"Bearer {HUBSPOT_API_KEY}", "Content-Type": "application/json"}
 
+def _hs_cutoff_ms() -> str:
+    """Return millisecond epoch string for N months ago (for HubSpot date filters)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_MONTHS * 30)
+    return str(int(cutoff.timestamp() * 1000))
+
+def _hs_request(method: str, path: str, *, json=None, params=None,
+                max_retries: int = 5, base_delay: float = 1.0):
+    """
+    Make a HubSpot API request with exponential back-off on 429 / 5xx.
+    Adds a small inter-request sleep to stay well under the 100 req/10s limit.
+    """
+    url = f"{HS_BASE}{path}"
+    headers = _hs_headers()
+    time.sleep(0.12)   # ~8 req/s soft cap — avoids bursting into 429s
+    for attempt in range(max_retries):
+        r = requests.request(method, url, headers=headers, json=json, params=params or {})
+        if r.status_code == 429 or r.status_code >= 500:
+            wait = base_delay * (2 ** attempt)
+            retry_after = int(r.headers.get("Retry-After", 0))
+            wait = max(wait, retry_after)
+            log.warning(f"HubSpot {r.status_code} on {path} — retrying in {wait:.1f}s (attempt {attempt+1})")
+            time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()
+    r.raise_for_status()   # re-raise after exhausted retries
+
 def _hs_post(path, body):
-    r = requests.post(f"{HS_BASE}{path}", headers=_hs_headers(), json=body)
-    r.raise_for_status()
-    return r.json()
+    return _hs_request("POST", path, json=body)
 
 def _hs_get(path, params=None):
-    r = requests.get(f"{HS_BASE}{path}", headers=_hs_headers(), params=params or {})
-    r.raise_for_status()
-    return r.json()
+    return _hs_request("GET", path, params=params)
 
 # Pipeline constants
 PIPELINE_TIM        = "855448889"
@@ -150,7 +175,10 @@ def _read_sheet_tab(spreadsheet_id, tab_name, max_rows=500):
 def _fetch_pipeline_quality():
     """Fetch all deals from Tim + Jay, enrich with company data, return structured data."""
 
-    # 1. Build WON company set
+    cutoff_ms = _hs_cutoff_ms()
+    log.info(f"Pipeline quality: fetching deals updated since {cutoff_ms} ({LOOKBACK_MONTHS} months)")
+
+    # 1. Build WON company set (no date filter — we want all historical wins)
     won_companies = {}
     for pip_id, won_stage in [(PIPELINE_NATASHA, "810a68c2-e01d-436b-aaa9-7c81f0760ec5"),
                                (PIPELINE_MAIN_SALES, "1277058739")]:
@@ -185,13 +213,14 @@ def _fetch_pipeline_quality():
             after = paging.get("after")
             if not after: break
 
-    # 2. Pull all deals from Tim + Jay
+    # 2. Pull deals from Tim + Jay — last N months only
     all_deals = []
     for sdr_name, pip_id in [("Tim", PIPELINE_TIM), ("Jay", PIPELINE_JAY)]:
         after = None
         while True:
             body = {"filterGroups":[{"filters":[
-                {"propertyName":"pipeline","operator":"EQ","value":pip_id}
+                {"propertyName":"pipeline","operator":"EQ","value":pip_id},
+                {"propertyName":"hs_lastmodifieddate","operator":"GTE","value":cutoff_ms},
             ]}],"properties":["dealname","dealstage","createdate"],"limit":100}
             if after: body["after"] = after
             resp = _hs_post("/crm/v3/objects/deals/search", body)
@@ -220,6 +249,8 @@ def _fetch_pipeline_quality():
                     if cid: deal_to_company[fid] = cid
         except Exception as e:
             log.warning(f"Association batch error: {e}")
+        if i + 100 < len(all_deals):
+            time.sleep(0.25)  # 250 ms between batches
 
     # 4. Batch company properties
     unique_cids = list({c for c in deal_to_company.values() if c})
@@ -233,6 +264,8 @@ def _fetch_pipeline_quality():
                 company_data[obj["id"]] = obj.get("properties",{})
         except Exception as e:
             log.warning(f"Company batch error: {e}")
+        if i + 100 < len(unique_cids):
+            time.sleep(0.25)
 
     # 5. Enrich deals
     enriched = []
@@ -390,13 +423,17 @@ def _fetch_researcher_activity():
 
 @_cached("sdr_activity", ttl=1800)
 def _fetch_sdr_activity():
-    # HubSpot stage breakdown
+    # HubSpot stage breakdown — last N months
+    cutoff_ms = _hs_cutoff_ms()
     hs_sdr = {}
     for sdr_name, pip_id in [("Tim", PIPELINE_TIM), ("Jay", PIPELINE_JAY)]:
         stage_counts = Counter()
         after = None
         while True:
-            body = {"filterGroups":[{"filters":[{"propertyName":"pipeline","operator":"EQ","value":pip_id}]}],
+            body = {"filterGroups":[{"filters":[
+                {"propertyName":"pipeline","operator":"EQ","value":pip_id},
+                {"propertyName":"hs_lastmodifieddate","operator":"GTE","value":cutoff_ms},
+            ]}],
                     "properties":["dealstage"],"limit":100}
             if after: body["after"] = after
             resp = _hs_post("/crm/v3/objects/deals/search", body)
@@ -488,11 +525,15 @@ def _fetch_sales_ae():
         "810a68c2-e01d-436b-aaa9-7c81f0760ec5":"WON","28103468":"LOST",
     }
 
+    cutoff_ms = _hs_cutoff_ms()
     deals = {"active":[], "won":[], "lost":[]}
     for pip_id, pip_label in [(PIPELINE_NATASHA, "Natasha"), (PIPELINE_MAIN_SALES, "Main Sales")]:
         after = None
         while True:
-            body = {"filterGroups":[{"filters":[{"propertyName":"pipeline","operator":"EQ","value":pip_id}]}],
+            body = {"filterGroups":[{"filters":[
+                {"propertyName":"pipeline","operator":"EQ","value":pip_id},
+                {"propertyName":"hs_lastmodifieddate","operator":"GTE","value":cutoff_ms},
+            ]}],
                     "properties":["dealname","dealstage","closedate","createdate","hubspot_owner_id","amount"],
                     "sorts":[{"propertyName":"createdate","direction":"DESCENDING"}],"limit":100}
             if after: body["after"] = after

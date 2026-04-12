@@ -88,6 +88,7 @@ def _noco_get_all(table_id: str, where: str = "", fields: str = "") -> list:
         if page_info.get("isLastPage", True) or len(batch) < PAGE_SIZE:
             break
         page += 1
+        time.sleep(0.2)   # stay under NocoDB rate limit
     log.info(f"NocoDB: loaded {len(rows)} rows from {table_id}")
     return rows
 

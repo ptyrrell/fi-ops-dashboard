@@ -68,12 +68,12 @@ def _noco_headers():
     return {"xc-token": NOCO_TOKEN, "Content-Type": "application/json"}
 
 def _noco_get_all(table_id: str, where: str = "", fields: str = "") -> list:
-    """Fetch ALL rows from a NocoDB table (handles pagination automatically)."""
+    """Fetch ALL rows from a NocoDB table (handles pagination; NocoDB caps at 100/page)."""
     rows = []
-    offset = 0
-    limit  = 1000
+    page = 1
+    PAGE_SIZE = 100   # NocoDB hard cap per page
     while True:
-        params = {"limit": limit, "offset": offset}
+        params = {"limit": PAGE_SIZE, "offset": (page - 1) * PAGE_SIZE}
         if where:  params["where"]  = where
         if fields: params["fields"] = fields
         r = requests.get(
@@ -84,9 +84,10 @@ def _noco_get_all(table_id: str, where: str = "", fields: str = "") -> list:
         data = r.json()
         batch = data.get("list", [])
         rows.extend(batch)
-        if len(batch) < limit:
+        page_info = data.get("pageInfo", {})
+        if page_info.get("isLastPage", True) or len(batch) < PAGE_SIZE:
             break
-        offset += limit
+        page += 1
     log.info(f"NocoDB: loaded {len(rows)} rows from {table_id}")
     return rows
 

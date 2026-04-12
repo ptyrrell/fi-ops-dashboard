@@ -140,17 +140,26 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .error-box { background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: 16px; color: #dc2626; font-size: 13px; }
 
-    /* ── DATE CONTROL ── */
+    /* ── DATE CONTROL (legacy — kept for compatibility) ── */
     .date-control { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .period-tabs { display: flex; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 3px; gap: 2px; }
-    .period-tab { padding: 5px 13px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; background: none; color: var(--text-secondary); font-family: 'Manrope', sans-serif; transition: all 0.15s; white-space: nowrap; }
-    .period-tab.active { background: var(--card); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
-    .period-tab:hover:not(.active) { color: var(--text-primary); }
-    .date-nav { display: flex; align-items: center; gap: 6px; }
-    .date-nav-btn { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); transition: all 0.15s; line-height: 1; }
-    .date-nav-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
-    .date-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-    .date-nav-label { font-size: 12px; font-weight: 700; color: var(--text-primary); min-width: 190px; text-align: center; font-family: 'DM Mono', monospace; white-space: nowrap; }
+
+    /* ── MONTH PICKER BAR (Financial Forecast design) ── */
+    .picker-bar { padding: 10px 28px; border-bottom: 1px solid var(--border); background: #fafbfc; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; position: sticky; top: 0; z-index: 9; }
+    .picker-year-chips { display: flex; gap: 5px; }
+    .picker-year-chip { padding: 5px 13px; border-radius: 7px; border: 1.5px solid var(--border); background: white; font-size: 12px; font-weight: 700; color: var(--text-muted); cursor: pointer; font-family: 'Manrope', sans-serif; transition: all 0.15s; }
+    .picker-year-chip:hover  { border-color: var(--accent); color: var(--accent); }
+    .picker-year-chip.active { background: var(--accent); border-color: var(--accent); color: white; }
+    .picker-month-grid { display: flex; gap: 4px; flex-wrap: wrap; }
+    .picker-mo-chip { flex-shrink: 0; padding: 5px 10px; border-radius: 7px; border: 1.5px solid var(--border); background: white; font-size: 12px; font-weight: 600; color: var(--text-muted); cursor: pointer; font-family: 'Manrope', sans-serif; transition: all 0.15s; }
+    .picker-mo-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    .picker-mo-chip.has-data { border-color: #bae6fd; color: var(--text-primary); }
+    .picker-mo-chip.active   { background: var(--accent); border-color: var(--accent); color: white !important; }
+    .picker-mo-chip:disabled { opacity: 0.3; cursor: not-allowed; }
+    .picker-sep  { width: 1px; height: 22px; background: var(--border); flex-shrink: 0; }
+    .picker-prevnext { display: flex; gap: 4px; }
+    .picker-prevnext button { width: 28px; height: 28px; border-radius: 6px; border: 1.5px solid var(--border); background: white; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-family: inherit; transition: all 0.15s; }
+    .picker-prevnext button:hover { border-color: var(--accent); color: var(--accent); }
+    .picker-range-label { font-size: 12px; font-weight: 700; color: var(--text-muted); white-space: nowrap; font-family: 'DM Mono', monospace; }
 
     /* ── RESPONSIVE ── */
     @media (max-width: 900px) {
@@ -172,7 +181,7 @@
     <div class="sidebar-logo">
       <div class="logo-mark">FI</div>
       <div class="logo-name">FieldInsight</div>
-      <div class="logo-sub">OPS DASHBOARD · v1.0</div>
+      <div class="logo-sub">OPS DASHBOARD · v1.1</div>
     </div>
 
     <div class="sidebar-section">
@@ -247,21 +256,21 @@
           <div class="page-title">Researcher Review</div>
         </div>
         <div class="header-actions">
-          <div class="date-control" id="researcher-date-control">
-            <div class="period-tabs">
-              <button class="period-tab active" onclick="setResearcherPeriod('all',this)">All Time</button>
-              <button class="period-tab" onclick="setResearcherPeriod('month',this)">Month</button>
-              <button class="period-tab" onclick="setResearcherPeriod('week',this)">Week</button>
-            </div>
-            <div class="date-nav" id="researcher-nav" style="display:none">
-              <button class="date-nav-btn" id="researcher-nav-prev" onclick="navResearcher(-1)">&#8592;</button>
-              <span class="date-nav-label" id="researcher-nav-label">—</span>
-              <button class="date-nav-btn" id="researcher-nav-next" onclick="navResearcher(1)" disabled>&#8594;</button>
-            </div>
-          </div>
           <span class="updated-badge" id="researchers-updated">—</span>
           <button class="btn btn-ghost" onclick="reload('researchers')">↺ Refresh</button>
         </div>
+      </div>
+      <!-- Month picker bar -->
+      <div class="picker-bar" id="researcher-picker-bar" style="display:none">
+        <div class="picker-year-chips" id="researcher-year-chips"></div>
+        <div class="picker-sep"></div>
+        <div class="picker-month-grid" id="researcher-month-grid"></div>
+        <div class="picker-sep"></div>
+        <div class="picker-prevnext">
+          <button onclick="shiftResearcherMonth(-1)" title="Previous month">‹</button>
+          <button onclick="shiftResearcherMonth(1)"  title="Next month">›</button>
+        </div>
+        <span class="picker-range-label" id="researcher-picker-range"></span>
       </div>
       <div class="page-content" id="researchers-content">
         <div class="loading"><div class="spinner"></div><span>Loading researcher data…</span></div>
@@ -278,21 +287,21 @@
           <div class="page-title">SDR Review</div>
         </div>
         <div class="header-actions">
-          <div class="date-control" id="sdr-date-control">
-            <div class="period-tabs">
-              <button class="period-tab active" onclick="setSDRPeriod('all',this)">All Time</button>
-              <button class="period-tab" onclick="setSDRPeriod('month',this)">Month</button>
-              <button class="period-tab" onclick="setSDRPeriod('week',this)">Week</button>
-            </div>
-            <div class="date-nav" id="sdr-nav" style="display:none">
-              <button class="date-nav-btn" id="sdr-nav-prev" onclick="navSDR(-1)">&#8592;</button>
-              <span class="date-nav-label" id="sdr-nav-label">—</span>
-              <button class="date-nav-btn" id="sdr-nav-next" onclick="navSDR(1)" disabled>&#8594;</button>
-            </div>
-          </div>
           <span class="updated-badge" id="sdr-updated">—</span>
           <button class="btn btn-ghost" onclick="reload('sdr')">↺ Refresh</button>
         </div>
+      </div>
+      <!-- Month picker bar -->
+      <div class="picker-bar" id="sdr-picker-bar" style="display:none">
+        <div class="picker-year-chips" id="sdr-year-chips"></div>
+        <div class="picker-sep"></div>
+        <div class="picker-month-grid" id="sdr-month-grid"></div>
+        <div class="picker-sep"></div>
+        <div class="picker-prevnext">
+          <button onclick="shiftSDRMonth(-1)" title="Previous month">‹</button>
+          <button onclick="shiftSDRMonth(1)"  title="Next month">›</button>
+        </div>
+        <span class="picker-range-label" id="sdr-picker-range"></span>
       </div>
       <div class="page-content" id="sdr-content">
         <div class="loading"><div class="spinner"></div><span>Loading SDR data…</span></div>
@@ -492,100 +501,125 @@ function aggregateRows(rows) {
   }));
 }
 
-// ── Researcher date state ─────────────────────────────────────────────────────
-let _researcherPeriod = 'all';
-let _researcherOffset = 0;
-let _researcherData   = null;
+// ── Shared month picker helpers ───────────────────────────────────────────────
+const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-function setResearcherPeriod(period, btn) {
-  document.querySelectorAll('#researcher-date-control .period-tab').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  _researcherPeriod = period;
-  _researcherOffset = 0;
-  const nav = document.getElementById('researcher-nav');
-  nav.style.display = period === 'all' ? 'none' : 'flex';
-  if (_researcherData) _applyResearcherFilter();
+function _monthsWithData(allRows) {
+  const s = new Set();
+  (allRows || []).forEach(r => { if (r.iso_date) s.add(r.iso_date.substring(0, 7)); });
+  return s;
 }
 
-function navResearcher(dir) {
-  _researcherOffset += dir;
-  // Disable "next" when at offset=0 (current period)
-  document.getElementById('researcher-nav-next').disabled = _researcherOffset >= 0;
-  if (_researcherData) _applyResearcherFilter();
+function _mostRecentMonthWithData(monthSet) {
+  const sorted = [...monthSet].sort();
+  return sorted.length ? sorted[sorted.length - 1] : new Date().toISOString().substring(0, 7);
+}
+
+function _fmtMonthRange(key) {
+  const [y, m] = key.split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  return `1 ${MONTH_SHORT[m-1]} – ${last} ${MONTH_SHORT[m-1]} ${y}`;
+}
+
+function _buildPickerHTML(prefix, currentKey, pickerYear, monthsWithData) {
+  const nowKey  = new Date().toISOString().substring(0, 7);
+  const nowYear = parseInt(nowKey.substring(0, 4));
+  const years   = [nowYear, nowYear - 1, nowYear - 2];
+
+  document.getElementById(`${prefix}-year-chips`).innerHTML = years.map(y =>
+    `<button class="picker-year-chip${y === pickerYear ? ' active' : ''}"
+             onclick="${prefix}PickerYear(${y})">${y}</button>`
+  ).join('');
+
+  document.getElementById(`${prefix}-month-grid`).innerHTML = MONTH_SHORT.map((mo, i) => {
+    const key    = `${pickerYear}-${String(i + 1).padStart(2, '0')}`;
+    const future = key > nowKey;
+    const active = key === currentKey;
+    const hasData = monthsWithData.has(key);
+    let cls = 'picker-mo-chip';
+    if (active)   cls += ' active';
+    else if (hasData) cls += ' has-data';
+    return `<button class="${cls}" ${future ? 'disabled' : ''}
+                    onclick="${prefix}PickerSelect('${key}')">${mo}</button>`;
+  }).join('');
+
+  document.getElementById(`${prefix}-picker-range`).textContent = _fmtMonthRange(currentKey);
+  document.getElementById(`${prefix}-picker-bar`).style.display = 'flex';
+}
+
+// ── Researcher month picker state ─────────────────────────────────────────────
+let _researcherMonth    = new Date().toISOString().substring(0, 7);
+let _researcherPickYear = new Date().getFullYear();
+let _researcherData     = null;
+let _researcherMonthSet = new Set();
+
+function researcherPickerYear(y)    { _researcherPickYear = y; _buildResearcherPicker(); }
+function researcherPickerSelect(key){ _researcherMonth = key; _researcherPickYear = parseInt(key); _buildResearcherPicker(); _applyResearcherFilter(); }
+function shiftResearcherMonth(d)    {
+  const [y, m] = _researcherMonth.split('-').map(Number);
+  const nd = new Date(y, m - 1 + d, 1);
+  const nk = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,'0')}`;
+  const nowKey = new Date().toISOString().substring(0, 7);
+  if (nk > nowKey || nd.getFullYear() < new Date().getFullYear() - 2) return;
+  researcherPickerSelect(nk);
+}
+function _buildResearcherPicker() {
+  _buildPickerHTML('researcher', _researcherMonth, _researcherPickYear, _researcherMonthSet);
 }
 
 function _applyResearcherFilter() {
-  let totals, recentRows, label;
-  if (_researcherPeriod === 'all') {
-    totals = _researcherData.totals;
-    recentRows = _researcherData.recent;
-    label = 'All Time';
-  } else {
-    const bounds = _researcherPeriod === 'week'
-      ? isoWeekBounds(_researcherOffset)
-      : isoMonthBounds(_researcherOffset);
-    label = bounds.label;
-    document.getElementById('researcher-nav-label').textContent = label;
-    const filtered = filterRows(_researcherData.all_rows, bounds.start, bounds.end);
-    totals = aggregateRows(filtered);
-    // "recent" table for date-filtered view = all filtered rows, sorted desc
-    recentRows = [...filtered].sort((a,b) => (b.iso_date||'').localeCompare(a.iso_date||''));
-  }
-  _renderResearcherTable(totals, recentRows, label);
+  if (!_researcherData) return;
+  const start = _researcherMonth + '-01';
+  const [y, m] = _researcherMonth.split('-').map(Number);
+  const end   = `${_researcherMonth}-${new Date(y, m, 0).getDate()}`;
+  const filtered  = filterRows(_researcherData.all_rows, start, end);
+  const totals     = aggregateRows(filtered);
+  const recentRows = [...filtered].sort((a,b) => (b.iso_date||'').localeCompare(a.iso_date||''));
+  _renderResearcherTable(totals, recentRows, _fmtMonthRange(_researcherMonth));
 }
 
-// ── SDR date state ────────────────────────────────────────────────────────────
-let _sdrPeriod = 'all';
-let _sdrOffset = 0;
-let _sdrData   = null;
+// ── SDR month picker state ────────────────────────────────────────────────────
+let _sdrMonth    = new Date().toISOString().substring(0, 7);
+let _sdrPickYear = new Date().getFullYear();
+let _sdrData     = null;
+let _sdrMonthSet = new Set();
 
-function setSDRPeriod(period, btn) {
-  document.querySelectorAll('#sdr-date-control .period-tab').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  _sdrPeriod = period;
-  _sdrOffset = 0;
-  const nav = document.getElementById('sdr-nav');
-  nav.style.display = period === 'all' ? 'none' : 'flex';
-  if (_sdrData) _applySDRFilter();
+function sdrPickerYear(y)    { _sdrPickYear = y; _buildSDRPicker(); }
+function sdrPickerSelect(key){ _sdrMonth = key; _sdrPickYear = parseInt(key); _buildSDRPicker(); _applySDRFilter(); }
+function shiftSDRMonth(d)    {
+  const [y, m] = _sdrMonth.split('-').map(Number);
+  const nd = new Date(y, m - 1 + d, 1);
+  const nk = `${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,'0')}`;
+  const nowKey = new Date().toISOString().substring(0, 7);
+  if (nk > nowKey || nd.getFullYear() < new Date().getFullYear() - 2) return;
+  sdrPickerSelect(nk);
 }
-
-function navSDR(dir) {
-  _sdrOffset += dir;
-  document.getElementById('sdr-nav-next').disabled = _sdrOffset >= 0;
-  if (_sdrData) _applySDRFilter();
+function _buildSDRPicker() {
+  _buildPickerHTML('sdr', _sdrMonth, _sdrPickYear, _sdrMonthSet);
 }
 
 function _applySDRFilter() {
-  let callTotals, recentRows, label;
-  if (_sdrPeriod === 'all') {
-    callTotals = _sdrData.call_activity;
-    recentRows = _sdrData.recent_activity;
-    label = 'All Time';
-  } else {
-    const bounds = _sdrPeriod === 'week'
-      ? isoWeekBounds(_sdrOffset)
-      : isoMonthBounds(_sdrOffset);
-    label = bounds.label;
-    document.getElementById('sdr-nav-label').textContent = label;
-    const filtered = filterRows(_sdrData.all_kyle_rows, bounds.start, bounds.end);
-    // Recompute SDR totals (dials/connects/demos only — no emails)
-    const byRep = {};
-    for (const r of filtered) {
-      const key = r.rep;
-      if (!byRep[key]) byRep[key] = {name:key, dials:0, connects:0, demos:0, days:0};
-      byRep[key].dials    += r.dials    || 0;
-      byRep[key].connects += r.connects || 0;
-      byRep[key].demos    += r.demos    || 0;
-      byRep[key].days     += 1;
-    }
-    callTotals = Object.values(byRep).map(r => ({
-      ...r,
-      connect_rate: r.dials    ? Math.round(r.connects / r.dials    * 100) : 0,
-      demo_rate:    r.connects ? Math.round(r.demos    / r.connects * 100) : 0,
-    }));
-    recentRows = [...filtered].sort((a,b) => (b.iso_date||'').localeCompare(a.iso_date||''));
+  if (!_sdrData) return;
+  const start = _sdrMonth + '-01';
+  const [y, m] = _sdrMonth.split('-').map(Number);
+  const end   = `${_sdrMonth}-${new Date(y, m, 0).getDate()}`;
+  const filtered = filterRows(_sdrData.all_kyle_rows, start, end);
+  const byRep = {};
+  for (const r of filtered) {
+    const key = r.rep;
+    if (!byRep[key]) byRep[key] = {name:key, dials:0, connects:0, demos:0, days:0};
+    byRep[key].dials    += r.dials    || 0;
+    byRep[key].connects += r.connects || 0;
+    byRep[key].demos    += r.demos    || 0;
+    byRep[key].days     += 1;
   }
-  _renderSDRCallTable(callTotals, recentRows, label);
+  const callTotals = Object.values(byRep).map(r => ({
+    ...r,
+    connect_rate: r.dials    ? Math.round(r.connects / r.dials    * 100) : 0,
+    demo_rate:    r.connects ? Math.round(r.demos    / r.connects * 100) : 0,
+  }));
+  const recentRows = [...filtered].sort((a,b) => (b.iso_date||'').localeCompare(a.iso_date||''));
+  _renderSDRCallTable(callTotals, recentRows, _fmtMonthRange(_sdrMonth));
 }
 
 // ── RENDER: Pipeline Quality ─────────────────────────────────────────────────
@@ -710,12 +744,12 @@ function renderResearchers(data) {
     return;
   }
   _researcherData   = data;
-  _researcherPeriod = 'all';
-  _researcherOffset = 0;
-  // Reset controls to All Time
-  document.querySelectorAll('#researcher-date-control .period-tab').forEach((b,i) => b.classList.toggle('active', i===0));
-  document.getElementById('researcher-nav').style.display = 'none';
-  _renderResearcherTable(data.totals, data.recent, 'All Time');
+  // Build month set from all_rows iso_dates
+  _researcherMonthSet = _monthsWithData(data.all_rows);
+  _researcherMonth    = _mostRecentMonthWithData(_researcherMonthSet);
+  _researcherPickYear = parseInt(_researcherMonth.substring(0, 4));
+  _buildResearcherPicker();
+  _applyResearcherFilter();
 }
 
 function _renderResearcherTable(totals, recentRows, label) {
@@ -809,11 +843,12 @@ function _renderResearcherTable(totals, recentRows, label) {
 // ── RENDER: SDR Review ───────────────────────────────────────────────────────
 function renderSDR(data) {
   _sdrData   = data;
-  _sdrPeriod = 'all';
-  _sdrOffset = 0;
-  document.querySelectorAll('#sdr-date-control .period-tab').forEach((b,i) => b.classList.toggle('active', i===0));
-  document.getElementById('sdr-nav').style.display = 'none';
-  _renderSDRCallTable(data.call_activity, data.recent_activity, 'All Time');
+  // Build month set from all_kyle_rows iso_dates
+  _sdrMonthSet = _monthsWithData(data.all_kyle_rows);
+  _sdrMonth    = _mostRecentMonthWithData(_sdrMonthSet);
+  _sdrPickYear = parseInt(_sdrMonth.substring(0, 4));
+  _buildSDRPicker();
+  _applySDRFilter();
   // Render pipeline cards (not date-filtered — these come from NocoDB)
   _renderSDRPipeline(data.hs_pipeline);
 }

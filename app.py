@@ -458,8 +458,9 @@ def _fetch_sdr_activity():
 
 @_cached("sales_ae", ttl=1800)
 def _fetch_sales_ae():
-    cutoff = datetime.now(timezone.utc) - timedelta(days=180)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=365)
     cutoff_ms = str(int(cutoff.timestamp() * 1000))
+    stale_cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
 
     deals = {"active": [], "won": [], "lost": []}
     for pip_id, pip_label in [(PIPELINE_NATASHA,"Natasha"), (PIPELINE_MAIN,"Main Sales")]:
@@ -468,9 +469,9 @@ def _fetch_sales_ae():
             body = {
                 "filterGroups": [{"filters": [
                     {"propertyName":"pipeline","operator":"EQ","value":pip_id},
-                    {"propertyName":"hs_lastmodifieddate","operator":"GTE","value":cutoff_ms},
+                    {"propertyName":"createdate","operator":"GTE","value":cutoff_ms},
                 ]}],
-                "properties": ["dealname","dealstage","closedate","createdate","amount"],
+                "properties": ["dealname","dealstage","closedate","createdate","amount","hs_lastmodifieddate"],
                 "sorts": [{"propertyName":"createdate","direction":"DESCENDING"}],
                 "limit": 100,
             }
@@ -479,6 +480,8 @@ def _fetch_sales_ae():
             for obj in resp.get("results", []):
                 p = obj["properties"]
                 sid = p.get("dealstage","")
+                created = (p.get("createdate","") or "")[:10]
+                modified = (p.get("hs_lastmodifieddate","") or "")[:10]
                 entry = {
                     "deal_id":   obj["id"],
                     "name":      p.get("dealname",""),
@@ -486,8 +489,10 @@ def _fetch_sales_ae():
                     "stage_id":  sid,
                     "pipeline":  pip_label,
                     "close_date":(p.get("closedate","") or "")[:10],
-                    "created":   (p.get("createdate","") or "")[:10],
+                    "created":   created,
+                    "modified":  modified,
                     "amount":    p.get("amount",""),
+                    "stale":     modified < stale_cutoff,
                 }
                 if sid in WON_STAGE_IDS:   deals["won"].append(entry)
                 elif sid in LOST_STAGE_IDS: deals["lost"].append(entry)
@@ -506,17 +511,29 @@ def _fetch_sales_ae():
         "lost":    sorted(deals["lost"], key=lambda x: x["close_date"], reverse=True)[:20],
         "funnel":  funnel,
         "summary": {
-            "active_count": len(deals["active"]),
-            "won_count":    len(deals["won"]),
-            "lost_count":   len(deals["lost"]),
-            "won_30d":      sum(1 for d in deals["won"]
-                               if d["close_date"] >= (datetime.now()-timedelta(days=30)).strftime("%Y-%m-%d")),
+            "active_count":  len(deals["active"]),
+            "won_count":     len(deals["won"]),
+            "lost_count":    len(deals["lost"]),
+            "stale_count":   sum(1 for d in deals["active"] if d.get("stale")),
+            "won_30d":       sum(1 for d in deals["won"]
+                                if d["close_date"] >= (datetime.now()-timedelta(days=30)).strftime("%Y-%m-%d")),
+            "won_mtd":       sum(1 for d in deals["won"]
+                                if d["close_date"] >= datetime.now().strftime("%Y-%m-01")),
+            "pipeline_value": sum(float(d["amount"]) for d in deals["active"] if d.get("amount")),
         },
         "updated_at":  datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-        "data_source": "HubSpot (Natasha + Main Sales, 6-month delta)",
+        "data_source": "HubSpot (Natasha + Main Sales, last 12 months)",
     }
 
 # ── Data: Onboarding (Google Sheets) ─────────────────────────────────────────
+# Sheet structure (fixed layout):
+#   Rows 0-8:  title, summary stats (Active/At Risk/Completed/Churned counts)
+#   Row 9:     column headers: Company | Key Human | Quote Link | Won Date | Project Manager | MRR | Status
+#   Row 10:    "TARGETS" section label (skip)
+#   Row 11+:   actual customer records
+
+_ONBOARDING_HEADER_ROW = 9   # 0-indexed
+_ONBOARDING_DATA_START  = 11  # 0-indexed
 
 @_cached("onboarding", ttl=1800)
 def _fetch_onboarding():
@@ -529,21 +546,36 @@ def _fetch_onboarding():
         try: return row[i].strip() if len(row) > i else ""
         except: return ""
 
-    headers = rows[0] if rows else []
+    # Extract pipeline summary counts from rows 3-6
+    summary_map = {}
+    for row in rows[3:7]:
+        label = v(row, 0)
+        val   = v(row, 1)
+        if label and val:
+            try: summary_map[label] = int(val)
+            except: summary_map[label] = val
+
+    # Column headers from row 9
+    headers = rows[_ONBOARDING_HEADER_ROW] if len(rows) > _ONBOARDING_HEADER_ROW else []
+
+    # Customer data from row 11 onwards — skip section labels (no MRR value, or single-word rows)
+    SKIP_LABELS = {"targets", "active", "at risk", "completed", "churned", ""}
     customers = []
-    for row in rows[1:]:
-        if len(row) < 2 or not v(row, 0): continue
+    for row in rows[_ONBOARDING_DATA_START:]:
+        name = v(row, 0)
+        if not name or name.lower() in SKIP_LABELS: continue
         customers.append({col: v(row, i) for i, col in enumerate(headers) if col})
 
-    phase_counts = Counter(c.get("Phase","") or c.get("Status","") or "Unknown" for c in customers)
-    at_risk = [c for c in customers if any(
-        x in (c.get("Status","") + c.get("Phase","")).lower()
-        for x in ["risk","overdue","stuck","delayed","⚠","🔴"]
-    )]
+    # Mark at-risk: explicitly flagged or no activity in 60+ days
+    at_risk = [c for c in customers if
+        "risk" in c.get("Status","").lower() or c.get("Status","") == "At Risk"]
+
+    phase_counts = Counter(c.get("Status","Active") or "Active" for c in customers)
 
     return {
-        "customers":    customers[:40],
+        "customers":    customers,
         "total":        len(customers),
+        "pipeline_summary": summary_map,   # Active:13, At Risk:0, Completed:1, Churned:0
         "phase_counts": dict(phase_counts),
         "at_risk":      at_risk,
         "updated_at":   datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),

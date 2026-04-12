@@ -140,6 +140,18 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .error-box { background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: 16px; color: #dc2626; font-size: 13px; }
 
+    /* ── DATE CONTROL ── */
+    .date-control { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .period-tabs { display: flex; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 3px; gap: 2px; }
+    .period-tab { padding: 5px 13px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; background: none; color: var(--text-secondary); font-family: 'Manrope', sans-serif; transition: all 0.15s; white-space: nowrap; }
+    .period-tab.active { background: var(--card); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+    .period-tab:hover:not(.active) { color: var(--text-primary); }
+    .date-nav { display: flex; align-items: center; gap: 6px; }
+    .date-nav-btn { width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); transition: all 0.15s; line-height: 1; }
+    .date-nav-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+    .date-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .date-nav-label { font-size: 12px; font-weight: 700; color: var(--text-primary); min-width: 190px; text-align: center; font-family: 'DM Mono', monospace; white-space: nowrap; }
+
     /* ── RESPONSIVE ── */
     @media (max-width: 900px) {
       .sidebar { width: 200px; }
@@ -235,6 +247,18 @@
           <div class="page-title">Researcher Review</div>
         </div>
         <div class="header-actions">
+          <div class="date-control" id="researcher-date-control">
+            <div class="period-tabs">
+              <button class="period-tab active" onclick="setResearcherPeriod('all',this)">All Time</button>
+              <button class="period-tab" onclick="setResearcherPeriod('month',this)">Month</button>
+              <button class="period-tab" onclick="setResearcherPeriod('week',this)">Week</button>
+            </div>
+            <div class="date-nav" id="researcher-nav" style="display:none">
+              <button class="date-nav-btn" id="researcher-nav-prev" onclick="navResearcher(-1)">&#8592;</button>
+              <span class="date-nav-label" id="researcher-nav-label">—</span>
+              <button class="date-nav-btn" id="researcher-nav-next" onclick="navResearcher(1)" disabled>&#8594;</button>
+            </div>
+          </div>
           <span class="updated-badge" id="researchers-updated">—</span>
           <button class="btn btn-ghost" onclick="reload('researchers')">↺ Refresh</button>
         </div>
@@ -254,6 +278,18 @@
           <div class="page-title">SDR Review</div>
         </div>
         <div class="header-actions">
+          <div class="date-control" id="sdr-date-control">
+            <div class="period-tabs">
+              <button class="period-tab active" onclick="setSDRPeriod('all',this)">All Time</button>
+              <button class="period-tab" onclick="setSDRPeriod('month',this)">Month</button>
+              <button class="period-tab" onclick="setSDRPeriod('week',this)">Week</button>
+            </div>
+            <div class="date-nav" id="sdr-nav" style="display:none">
+              <button class="date-nav-btn" id="sdr-nav-prev" onclick="navSDR(-1)">&#8592;</button>
+              <span class="date-nav-label" id="sdr-nav-label">—</span>
+              <button class="date-nav-btn" id="sdr-nav-next" onclick="navSDR(1)" disabled>&#8594;</button>
+            </div>
+          </div>
           <span class="updated-badge" id="sdr-updated">—</span>
           <button class="btn btn-ghost" onclick="reload('sdr')">↺ Refresh</button>
         </div>
@@ -396,6 +432,162 @@ function avatarColor(name) {
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
 
+// ── Date filtering helpers ────────────────────────────────────────────────────
+
+const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const DAYS_SHORT   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+function fmtDateShort(d) {
+  return `${DAYS_SHORT[d.getDay()]} ${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}`;
+}
+
+/** ISO week bounds (Mon–Sun) for a given offset from current week. */
+function isoWeekBounds(offset) {
+  const now = new Date();
+  const day = now.getDay();
+  const diffToMon = day === 0 ? -6 : 1 - day;
+  const mon = new Date(now); mon.setDate(now.getDate() + diffToMon + offset * 7);
+  const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+  const toISO = d => d.toISOString().slice(0, 10);
+  return {
+    start: toISO(mon), end: toISO(sun),
+    label: `${fmtDateShort(mon)} – ${fmtDateShort(sun)} ${sun.getFullYear()}`,
+  };
+}
+
+/** Calendar month bounds for a given offset from current month. */
+function isoMonthBounds(offset) {
+  const now = new Date();
+  const y = now.getFullYear(); const m = now.getMonth() + offset;
+  const first = new Date(y, m, 1); const last = new Date(y, m + 1, 0);
+  const toISO = d => d.toISOString().slice(0, 10);
+  return {
+    start: toISO(first), end: toISO(last),
+    label: first.toLocaleString('en-AU', { month: 'long', year: 'numeric' }),
+  };
+}
+
+/** Filter all_rows to those within [start, end] ISO date range. */
+function filterRows(allRows, start, end) {
+  return (allRows || []).filter(r => r.iso_date && r.iso_date >= start && r.iso_date <= end);
+}
+
+/** Recompute per-researcher totals from a set of individual rows. */
+function aggregateRows(rows) {
+  const byRep = {};
+  for (const r of rows) {
+    const key = r.rep;
+    if (!byRep[key]) byRep[key] = {name:key, leads:0, dials:0, emails:0, connects:0, demos:0, days:0};
+    byRep[key].leads    += r.leads    || 0;
+    byRep[key].dials    += r.dials    || 0;
+    byRep[key].emails   += r.emails   || 0;
+    byRep[key].connects += r.connects || 0;
+    byRep[key].demos    += r.demos    || 0;
+    byRep[key].days     += 1;
+  }
+  return Object.values(byRep).map(r => ({
+    ...r,
+    connect_rate: r.dials    ? Math.round(r.connects / r.dials    * 100) : 0,
+    demo_rate:    r.connects ? Math.round(r.demos    / r.connects * 100) : 0,
+  }));
+}
+
+// ── Researcher date state ─────────────────────────────────────────────────────
+let _researcherPeriod = 'all';
+let _researcherOffset = 0;
+let _researcherData   = null;
+
+function setResearcherPeriod(period, btn) {
+  document.querySelectorAll('#researcher-date-control .period-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _researcherPeriod = period;
+  _researcherOffset = 0;
+  const nav = document.getElementById('researcher-nav');
+  nav.style.display = period === 'all' ? 'none' : 'flex';
+  if (_researcherData) _applyResearcherFilter();
+}
+
+function navResearcher(dir) {
+  _researcherOffset += dir;
+  // Disable "next" when at offset=0 (current period)
+  document.getElementById('researcher-nav-next').disabled = _researcherOffset >= 0;
+  if (_researcherData) _applyResearcherFilter();
+}
+
+function _applyResearcherFilter() {
+  let totals, recentRows, label;
+  if (_researcherPeriod === 'all') {
+    totals = _researcherData.totals;
+    recentRows = _researcherData.recent;
+    label = 'All Time';
+  } else {
+    const bounds = _researcherPeriod === 'week'
+      ? isoWeekBounds(_researcherOffset)
+      : isoMonthBounds(_researcherOffset);
+    label = bounds.label;
+    document.getElementById('researcher-nav-label').textContent = label;
+    const filtered = filterRows(_researcherData.all_rows, bounds.start, bounds.end);
+    totals = aggregateRows(filtered);
+    // "recent" table for date-filtered view = all filtered rows, sorted desc
+    recentRows = [...filtered].sort((a,b) => (b.iso_date||'').localeCompare(a.iso_date||''));
+  }
+  _renderResearcherTable(totals, recentRows, label);
+}
+
+// ── SDR date state ────────────────────────────────────────────────────────────
+let _sdrPeriod = 'all';
+let _sdrOffset = 0;
+let _sdrData   = null;
+
+function setSDRPeriod(period, btn) {
+  document.querySelectorAll('#sdr-date-control .period-tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _sdrPeriod = period;
+  _sdrOffset = 0;
+  const nav = document.getElementById('sdr-nav');
+  nav.style.display = period === 'all' ? 'none' : 'flex';
+  if (_sdrData) _applySDRFilter();
+}
+
+function navSDR(dir) {
+  _sdrOffset += dir;
+  document.getElementById('sdr-nav-next').disabled = _sdrOffset >= 0;
+  if (_sdrData) _applySDRFilter();
+}
+
+function _applySDRFilter() {
+  let callTotals, recentRows, label;
+  if (_sdrPeriod === 'all') {
+    callTotals = _sdrData.call_activity;
+    recentRows = _sdrData.recent_activity;
+    label = 'All Time';
+  } else {
+    const bounds = _sdrPeriod === 'week'
+      ? isoWeekBounds(_sdrOffset)
+      : isoMonthBounds(_sdrOffset);
+    label = bounds.label;
+    document.getElementById('sdr-nav-label').textContent = label;
+    const filtered = filterRows(_sdrData.all_kyle_rows, bounds.start, bounds.end);
+    // Recompute SDR totals (dials/connects/demos only — no emails)
+    const byRep = {};
+    for (const r of filtered) {
+      const key = r.rep;
+      if (!byRep[key]) byRep[key] = {name:key, dials:0, connects:0, demos:0, days:0};
+      byRep[key].dials    += r.dials    || 0;
+      byRep[key].connects += r.connects || 0;
+      byRep[key].demos    += r.demos    || 0;
+      byRep[key].days     += 1;
+    }
+    callTotals = Object.values(byRep).map(r => ({
+      ...r,
+      connect_rate: r.dials    ? Math.round(r.connects / r.dials    * 100) : 0,
+      demo_rate:    r.connects ? Math.round(r.demos    / r.connects * 100) : 0,
+    }));
+    recentRows = [...filtered].sort((a,b) => (b.iso_date||'').localeCompare(a.iso_date||''));
+  }
+  _renderSDRCallTable(callTotals, recentRows, label);
+}
+
 // ── RENDER: Pipeline Quality ─────────────────────────────────────────────────
 function renderPage(name, data) {
   document.getElementById(name+'-updated').textContent = data.updated_at || '';
@@ -517,22 +709,36 @@ function renderResearchers(data) {
     document.getElementById('researchers-content').innerHTML = `<div class="error-box">⚠️ ${data.error}</div>`;
     return;
   }
+  _researcherData   = data;
+  _researcherPeriod = 'all';
+  _researcherOffset = 0;
+  // Reset controls to All Time
+  document.querySelectorAll('#researcher-date-control .period-tab').forEach((b,i) => b.classList.toggle('active', i===0));
+  document.getElementById('researcher-nav').style.display = 'none';
+  _renderResearcherTable(data.totals, data.recent, 'All Time');
+}
 
-  let html = `
-  <div class="kpi-grid">`;
+function _renderResearcherTable(totals, recentRows, label) {
+  const totalsArr = totals || [];
   let totalLeads=0, totalDials=0, totalConnects=0, totalDemos=0;
-  for (const r of data.totals) {
+  for (const r of totalsArr) {
     totalLeads+=r.leads; totalDials+=r.dials; totalConnects+=r.connects; totalDemos+=r.demos;
   }
-  html += `
-    <div class="kpi blue"><div class="kpi-label">Total Leads</div><div class="kpi-value">${totalLeads.toLocaleString()}</div><div class="kpi-sub">${data.date_range}</div></div>
+
+  const periodLabel = label === 'All Time' ? (_researcherData?.date_range || 'All Time') : label;
+
+  let html = `
+  <div class="kpi-grid">
+    <div class="kpi blue"><div class="kpi-label">Total Leads</div><div class="kpi-value">${totalLeads.toLocaleString()}</div><div class="kpi-sub">${periodLabel}</div></div>
     <div class="kpi teal"><div class="kpi-label">Total Dials</div><div class="kpi-value">${totalDials.toLocaleString()}</div><div class="kpi-sub">All researchers</div></div>
     <div class="kpi green"><div class="kpi-label">Connects</div><div class="kpi-value">${totalConnects}</div><div class="kpi-sub">${totalDials ? Math.round(totalConnects/totalDials*100) : 0}% connect rate</div></div>
     <div class="kpi purple"><div class="kpi-label">Demos Set</div><div class="kpi-value">${totalDemos}</div><div class="kpi-sub">${totalConnects ? Math.round(totalDemos/totalConnects*100) : 0}% from connects</div></div>
   </div>
 
   <div class="card">
-    <div class="card-header"><div class="card-title">🔬 Researcher Performance (All Time)</div></div>
+    <div class="card-header">
+      <div class="card-title">🔬 Researcher Performance <span style="font-size:11px;font-weight:500;color:var(--text-muted);margin-left:6px">${label}</span></div>
+    </div>
     <table class="fi-table">
       <thead>
         <tr>
@@ -549,38 +755,51 @@ function renderResearchers(data) {
       </thead>
       <tbody>`;
 
-  for (const r of data.totals) {
-    html += `<tr class="researcher-row">
-      <td class="bold">${r.name}</td>
-      <td class="right mono muted">${r.days}</td>
-      <td class="right mono">${r.leads}</td>
-      <td class="right mono">${r.dials}</td>
-      <td class="right mono">${r.emails}</td>
-      <td class="right mono">${r.connects}</td>
-      <td class="right"><span class="pct-num ${pctClass(r.connect_rate,30,15)}">${r.connect_rate}%</span></td>
-      <td class="right mono">${r.demos}</td>
-      <td class="right"><span class="pct-num ${pctClass(r.demo_rate,20,10)}">${r.demo_rate}%</span></td>
-    </tr>`;
+  if (!totalsArr.length) {
+    html += `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:24px">No data for this period</td></tr>`;
+  } else {
+    for (const r of totalsArr) {
+      html += `<tr class="researcher-row">
+        <td class="bold">${r.name}</td>
+        <td class="right mono muted">${r.days}</td>
+        <td class="right mono">${r.leads}</td>
+        <td class="right mono">${r.dials}</td>
+        <td class="right mono">${r.emails ?? '—'}</td>
+        <td class="right mono">${r.connects}</td>
+        <td class="right"><span class="pct-num ${pctClass(r.connect_rate,30,15)}">${r.connect_rate}%</span></td>
+        <td class="right mono">${r.demos}</td>
+        <td class="right"><span class="pct-num ${pctClass(r.demo_rate,20,10)}">${r.demo_rate}%</span></td>
+      </tr>`;
+    }
   }
 
+  const recentTitle = label === 'All Time' ? 'Recent Activity (Last 7 Working Days)' : `Daily Breakdown · ${label}`;
   html += `</tbody></table></div>
 
   <div class="card">
-    <div class="card-header"><div class="card-title">📅 Recent Activity (Last 7 Working Days)</div></div>
+    <div class="card-header"><div class="card-title">📅 ${recentTitle}</div></div>
     <table class="fi-table">
       <thead><tr><th>Date</th><th>Rep</th><th class="right">Leads</th><th class="right">Dials</th><th class="right">Emails</th><th class="right">Connects</th><th class="right">Demos</th></tr></thead>
       <tbody>`;
 
-  for (const r of data.recent.slice().reverse().slice(0,30)) {
-    html += `<tr>
-      <td class="muted mono">${r.date}</td>
-      <td class="bold">${r.rep}</td>
-      <td class="right mono">${r.leads||'—'}</td>
-      <td class="right mono">${r.dials||'—'}</td>
-      <td class="right mono">${r.emails||'—'}</td>
-      <td class="right mono">${r.connects||'—'}</td>
-      <td class="right mono">${r.demos||'—'}</td>
-    </tr>`;
+  const displayRows = label === 'All Time'
+    ? [...(recentRows||[])].reverse().slice(0, 30)
+    : (recentRows||[]).slice(0, 60);
+
+  if (!displayRows.length) {
+    html += `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">No activity recorded for this period</td></tr>`;
+  } else {
+    for (const r of displayRows) {
+      html += `<tr>
+        <td class="muted mono">${r.date}</td>
+        <td class="bold">${r.rep}</td>
+        <td class="right mono">${r.leads||'—'}</td>
+        <td class="right mono">${r.dials||'—'}</td>
+        <td class="right mono">${r.emails||'—'}</td>
+        <td class="right mono">${r.connects||'—'}</td>
+        <td class="right mono">${r.demos||'—'}</td>
+      </tr>`;
+    }
   }
 
   html += `</tbody></table></div>`;
@@ -589,8 +808,24 @@ function renderResearchers(data) {
 
 // ── RENDER: SDR Review ───────────────────────────────────────────────────────
 function renderSDR(data) {
-  const hs = data.hs_pipeline;
+  _sdrData   = data;
+  _sdrPeriod = 'all';
+  _sdrOffset = 0;
+  document.querySelectorAll('#sdr-date-control .period-tab').forEach((b,i) => b.classList.toggle('active', i===0));
+  document.getElementById('sdr-nav').style.display = 'none';
+  _renderSDRCallTable(data.call_activity, data.recent_activity, 'All Time');
+  // Render pipeline cards (not date-filtered — these come from NocoDB)
+  _renderSDRPipeline(data.hs_pipeline);
+}
 
+function _renderSDRPipeline(hs) {
+  // Pipeline cards are prepended; called once on load
+  const existing = document.getElementById('sdr-content');
+  // We'll insert pipeline html before the call table — done in full render below
+}
+
+function _renderSDRCallTable(callActivity, recentRows, label) {
+  const hs = _sdrData?.hs_pipeline || {};
   let html = `<div class="two-col">`;
 
   for (const [sdr, pip] of Object.entries(hs)) {
@@ -619,13 +854,15 @@ function renderSDR(data) {
 
   html += `</div>`;
 
-  if (data.call_activity && data.call_activity.length) {
+  if (callActivity && callActivity.length) {
     html += `<div class="card">
-      <div class="card-header"><div class="card-title">📊 SDR Call Activity (Kyle Tracking)</div></div>
+      <div class="card-header">
+        <div class="card-title">📊 SDR Call Activity <span style="font-size:11px;font-weight:500;color:var(--text-muted);margin-left:6px">${label}</span></div>
+      </div>
       <table class="fi-table">
         <thead><tr><th>SDR</th><th class="right">Days</th><th class="right">Dials</th><th class="right">Connects</th><th class="right">Connect%</th><th class="right">Demos</th><th class="right">Demo%</th></tr></thead>
         <tbody>`;
-    for (const r of data.call_activity) {
+    for (const r of callActivity) {
       html += `<tr class="researcher-row">
         <td class="bold">${r.name}</td>
         <td class="right mono muted">${r.days}</td>
@@ -639,13 +876,17 @@ function renderSDR(data) {
     html += `</tbody></table></div>`;
   }
 
-  if (data.recent_activity && data.recent_activity.length) {
+  if (recentRows && recentRows.length) {
+    const recentTitle = label === 'All Time' ? 'Recent SDR Activity (Last 7 Working Days)' : `Daily Breakdown · ${label}`;
+    const displayRows = label === 'All Time'
+      ? [...recentRows].reverse().slice(0, 25)
+      : recentRows.slice(0, 60);
     html += `<div class="card">
-      <div class="card-header"><div class="card-title">📅 Recent SDR Activity (Last 7 Working Days)</div></div>
+      <div class="card-header"><div class="card-title">📅 ${recentTitle}</div></div>
       <table class="fi-table">
         <thead><tr><th>Date</th><th>Rep</th><th class="right">Dials</th><th class="right">Connects</th><th class="right">Demos</th></tr></thead>
         <tbody>`;
-    for (const r of data.recent_activity.slice().reverse().slice(0,25)) {
+    for (const r of displayRows) {
       html += `<tr><td class="muted mono">${r.date}</td><td class="bold">${r.rep}</td>
         <td class="right mono">${r.dials||'—'}</td><td class="right mono">${r.connects||'—'}</td><td class="right mono">${r.demos||'—'}</td></tr>`;
     }

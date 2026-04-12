@@ -354,9 +354,29 @@ def _fetch_researcher_activity():
     date_range_start = all_dates[0]  if all_dates else "—"
     date_range_end   = all_dates[-1] if all_dates else "—"
 
+    # All individual rows with ISO dates — used by frontend date-filter controls
+    all_rows_export = []
+    for row in rows[2:]:
+        if len(row) < 2 or not v(row, 0) or not v(row, 1): continue
+        rep = v(row, 1).lower()
+        if rep not in RESEARCHERS: continue
+        raw_date = v(row, 0)
+        parsed   = _parse_sheet_date(raw_date)
+        all_rows_export.append({
+            "date":     raw_date,
+            "iso_date": parsed.isoformat() if parsed else None,
+            "rep":      v(row, 1),
+            "leads":    n(row, 2),
+            "dials":    n(row, 4),
+            "emails":   n(row, 5),
+            "connects": n(row, 6),
+            "demos":    n(row, 8),
+        })
+
     return {
         "totals":     totals,
         "recent":     recent,
+        "all_rows":   all_rows_export,
         "date_range": f"{date_range_start} – {date_range_end}",
         "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
@@ -454,10 +474,27 @@ def _fetch_sdr_activity():
             "demo_rate":    round(stats["demos"]/stats["connects"]*100) if stats["connects"] else 0,
         })
 
+    # All individual rows with ISO dates — used by frontend date-filter controls
+    all_kyle_rows_export = []
+    for row in kyle_rows[2:]:
+        if len(row) < 2 or not v(row, 0) or not v(row, 1): continue
+        if v(row, 1).lower() not in SDR_NAMES: continue
+        raw_date = v(row, 0)
+        parsed   = _parse_sheet_date(raw_date)
+        all_kyle_rows_export.append({
+            "date":     raw_date,
+            "iso_date": parsed.isoformat() if parsed else None,
+            "rep":      v(row, 1),
+            "dials":    n(row, 2),
+            "connects": n(row, 3),
+            "demos":    n(row, 4),
+        })
+
     return {
         "hs_pipeline":    hs_sdr,
         "call_activity":  sdr_totals,
         "recent_activity": recent_kyle[-40:],
+        "all_kyle_rows":  all_kyle_rows_export,
         "updated_at":     datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "data_source":    "NocoDB pipeline + Google Sheets call log",
     }

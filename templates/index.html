@@ -539,7 +539,7 @@ function renderResearchers(data) {
   html += `</tbody></table></div>
 
   <div class="card">
-    <div class="card-header"><div class="card-title">📅 Recent Activity (Last 5 Days)</div></div>
+    <div class="card-header"><div class="card-title">📅 Recent Activity (Last 7 Working Days)</div></div>
     <table class="fi-table">
       <thead><tr><th>Date</th><th>Rep</th><th class="right">Leads</th><th class="right">Dials</th><th class="right">Emails</th><th class="right">Connects</th><th class="right">Demos</th></tr></thead>
       <tbody>`;
@@ -614,7 +614,7 @@ function renderSDR(data) {
 
   if (data.recent_activity && data.recent_activity.length) {
     html += `<div class="card">
-      <div class="card-header"><div class="card-title">📅 Recent SDR Activity</div></div>
+      <div class="card-header"><div class="card-title">📅 Recent SDR Activity (Last 7 Working Days)</div></div>
       <table class="fi-table">
         <thead><tr><th>Date</th><th>Rep</th><th class="right">Dials</th><th class="right">Connects</th><th class="right">Demos</th></tr></thead>
         <tbody>`;

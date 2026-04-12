@@ -228,6 +228,40 @@ def _fetch_pipeline_quality():
         "data_source": "NocoDB (synced from HubSpot)",
     }
 
+# ── Date helpers ─────────────────────────────────────────────────────────────
+
+def _parse_sheet_date(raw: str):
+    """
+    Try to parse a date string from a Google Sheet into a datetime.date.
+    Handles common formats: 'Mon, Apr 12, 2026' / '12/04/2026' / '2026-04-12' / '12 Apr 2026'
+    Returns datetime.date or None if unparseable.
+    """
+    from datetime import date as _date
+    import re
+    s = raw.strip()
+    if not s:
+        return None
+    for fmt in (
+        "%a, %b %d, %Y",   # Mon, Apr 12, 2026
+        "%A, %B %d, %Y",   # Monday, April 12, 2026
+        "%d/%m/%Y",         # 12/04/2026
+        "%m/%d/%Y",         # 04/12/2026
+        "%Y-%m-%d",         # 2026-04-12
+        "%d %b %Y",         # 12 Apr 2026
+        "%d %B %Y",         # 12 April 2026
+        "%b %d, %Y",        # Apr 12, 2026
+    ):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+    return None
+
+def _recent_date_cutoff(days: int = 14):
+    """Return a date N calendar days ago (for filtering sheet rows)."""
+    return (datetime.now(timezone.utc) - timedelta(days=days)).date()
+
+
 # ── Data: Researcher activity (Google Sheets) ─────────────────────────────────
 
 @_cached("researcher_activity", ttl=1800)
@@ -238,6 +272,8 @@ def _fetch_researcher_activity():
         return {"error": str(e), "rows": []}
 
     RESEARCHERS = {"chinju","veera","mohanapriya","tamil"}
+    cutoff = _recent_date_cutoff(days=14)   # look back 14 calendar days max
+    today  = datetime.now(timezone.utc).date()
 
     def v(row, i):
         try: return row[i].strip() if len(row) > i else ""
@@ -247,16 +283,55 @@ def _fetch_researcher_activity():
         except: return 0
 
     by_researcher = defaultdict(lambda: {"leads":0,"dials":0,"emails":0,"connects":0,"demos":0,"days":0})
-    dates_seen = []
+    all_dates = []
+    recent_rows = []  # (parsed_date, raw_date_str, row)
+
     for row in rows[2:]:
         if len(row) < 2 or not v(row,0) or not v(row,1): continue
         rep = v(row,1).lower()
         if rep not in RESEARCHERS: continue
-        date = v(row,0)
-        if date not in dates_seen: dates_seen.append(date)
+
+        raw_date = v(row,0)
+        parsed   = _parse_sheet_date(raw_date)
+
+        # Accumulate all-time totals
         r = by_researcher[v(row,1)]
         r["leads"] += n(row,2); r["dials"] += n(row,4); r["emails"] += n(row,5)
         r["connects"] += n(row,6); r["demos"] += n(row,8); r["days"] += 1
+
+        if raw_date not in all_dates:
+            all_dates.append(raw_date)
+
+        # Only include in recent if date is parseable AND within last 14 days AND not future
+        if parsed and cutoff <= parsed <= today:
+            recent_rows.append((parsed, raw_date, row))
+
+    # If no parseable dates fell within 14 days, fall back to last 7 sheet rows by date order
+    if not recent_rows:
+        fallback_dates = all_dates[-7:]
+        for row in rows[2:]:
+            if len(row) < 2 or not v(row,0) or not v(row,1): continue
+            if v(row,1).lower() not in RESEARCHERS: continue
+            if v(row,0) in fallback_dates:
+                recent_rows.append((None, v(row,0), row))
+
+    # Sort recent by parsed date descending (most recent first)
+    recent_rows.sort(key=lambda x: x[0] or datetime.min.date(), reverse=True)
+
+    recent = []
+    seen_dates = []
+    for parsed, raw_date, row in recent_rows:
+        if raw_date not in seen_dates: seen_dates.append(raw_date)
+        if len(seen_dates) > 7: break   # cap at 7 distinct days
+        recent.append({
+            "date":     raw_date,
+            "rep":      v(row,1),
+            "leads":    n(row,2),
+            "dials":    n(row,4),
+            "emails":   n(row,5),
+            "connects": n(row,6),
+            "demos":    n(row,8),
+        })
 
     totals = []
     for name, stats in by_researcher.items():
@@ -268,18 +343,13 @@ def _fetch_researcher_activity():
             "demo_rate":    round(stats["demos"]/stats["connects"]*100) if stats["connects"] else 0,
         })
 
-    recent = []
-    for row in rows[2:]:
-        if len(row) < 2 or not v(row,0) or not v(row,1): continue
-        if v(row,1).lower() not in RESEARCHERS: continue
-        if v(row,0) in dates_seen[-5:]:
-            recent.append({"date":v(row,0),"rep":v(row,1),"leads":n(row,2),
-                           "dials":n(row,4),"emails":n(row,5),"connects":n(row,6),"demos":n(row,8)})
+    date_range_start = all_dates[0]  if all_dates else "—"
+    date_range_end   = all_dates[-1] if all_dates else "—"
 
     return {
         "totals":     totals,
         "recent":     recent,
-        "date_range": f"{dates_seen[0] if dates_seen else '—'} – {dates_seen[-1] if dates_seen else '—'}",
+        "date_range": f"{date_range_start} – {date_range_end}",
         "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
 
@@ -328,19 +398,44 @@ def _fetch_sdr_activity():
 
     SDR_NAMES = {"tim","jay","natasha","tim h","tim huynh"}
     kyle_by_sdr = defaultdict(lambda: {"dials":0,"connects":0,"demos":0,"days":0})
-    recent_kyle = []
-    dates_seen = []
+    kyle_recent_rows = []  # (parsed_date, raw_date, row)
+    cutoff = _recent_date_cutoff(days=14)
+    today  = datetime.now(timezone.utc).date()
+
     for row in kyle_rows[2:]:
         if len(row) < 2 or not v(row,0) or not v(row,1): continue
         rep = v(row,1).lower()
         if rep not in SDR_NAMES: continue
-        date = v(row,0)
-        if date not in dates_seen: dates_seen.append(date)
+        raw_date = v(row,0)
+        parsed   = _parse_sheet_date(raw_date)
         r = kyle_by_sdr[v(row,1)]
         r["dials"] += n(row,2); r["connects"] += n(row,3); r["demos"] += n(row,4); r["days"] += 1
-        if date in dates_seen[-7:]:
-            recent_kyle.append({"date":date,"rep":v(row,1),
-                                 "dials":n(row,2),"connects":n(row,3),"demos":n(row,4)})
+        if parsed and cutoff <= parsed <= today:
+            kyle_recent_rows.append((parsed, raw_date, row))
+
+    # Fallback: if no parseable dates in window, use last 7 unique sheet dates
+    if not kyle_recent_rows:
+        all_kyle_dates = []
+        for row in kyle_rows[2:]:
+            if len(row) < 2 or not v(row,0) or not v(row,1): continue
+            if v(row,1).lower() not in SDR_NAMES: continue
+            d = v(row,0)
+            if d not in all_kyle_dates: all_kyle_dates.append(d)
+        for row in kyle_rows[2:]:
+            if len(row) < 2 or not v(row,0) or not v(row,1): continue
+            if v(row,1).lower() not in SDR_NAMES: continue
+            if v(row,0) in all_kyle_dates[-7:]:
+                kyle_recent_rows.append((None, v(row,0), row))
+
+    kyle_recent_rows.sort(key=lambda x: x[0] or datetime.min.date(), reverse=True)
+
+    recent_kyle = []
+    seen_dates  = []
+    for parsed, raw_date, row in kyle_recent_rows:
+        if raw_date not in seen_dates: seen_dates.append(raw_date)
+        if len(seen_dates) > 7: break
+        recent_kyle.append({"date": raw_date, "rep": v(row,1),
+                             "dials": n(row,2), "connects": n(row,3), "demos": n(row,4)})
 
     sdr_totals = []
     for sdr, stats in kyle_by_sdr.items():

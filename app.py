@@ -68,19 +68,27 @@ def _noco_headers():
     return {"xc-token": NOCO_TOKEN, "Content-Type": "application/json"}
 
 def _noco_get_all(table_id: str, where: str = "", fields: str = "") -> list:
-    """Fetch ALL rows from a NocoDB table (handles pagination; NocoDB caps at 100/page)."""
+    """Fetch ALL rows from a NocoDB table (handles pagination + 429 retry)."""
     rows = []
     page = 1
-    PAGE_SIZE = 100   # NocoDB hard cap per page
+    PAGE_SIZE = 100
+    MAX_RETRIES = 5
     while True:
         params = {"limit": PAGE_SIZE, "offset": (page - 1) * PAGE_SIZE}
         if where:  params["where"]  = where
         if fields: params["fields"] = fields
-        r = requests.get(
-            f"{NOCO_BASE_URL}/api/v1/db/data/noco/{NOCO_PROJECT_ID}/{table_id}",
-            headers=_noco_headers(), params=params,
-        )
-        r.raise_for_status()
+        for attempt in range(MAX_RETRIES):
+            r = requests.get(
+                f"{NOCO_BASE_URL}/api/v1/db/data/noco/{NOCO_PROJECT_ID}/{table_id}",
+                headers=_noco_headers(), params=params,
+            )
+            if r.status_code == 429:
+                wait = 2.0 * (2 ** attempt)
+                log.warning(f"NocoDB 429 on page {page}, retrying in {wait:.1f}s (attempt {attempt+1})")
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            break
         data = r.json()
         batch = data.get("list", [])
         rows.extend(batch)
@@ -88,7 +96,7 @@ def _noco_get_all(table_id: str, where: str = "", fields: str = "") -> list:
         if page_info.get("isLastPage", True) or len(batch) < PAGE_SIZE:
             break
         page += 1
-        time.sleep(0.2)   # stay under NocoDB rate limit
+        time.sleep(0.4)   # gentle pacing between pages
     log.info(f"NocoDB: loaded {len(rows)} rows from {table_id}")
     return rows
 

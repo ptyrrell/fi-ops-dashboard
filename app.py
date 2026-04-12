@@ -653,6 +653,80 @@ def api_health():
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "data_architecture": "NocoDB + Sheets (HubSpot only for AE pipeline)"})
 
+# ── Data: Sales Summary (Google Sheets — monthly cohort analysis) ─────────────
+# Sheet structure:
+#   Rows 2-6:  KPI summary (Total Discos, Won, Evaluation, Lost, MRR, rates)
+#   Row 9:     Column headers
+#   Row 11+:   Monthly cohort rows
+
+@_cached("sales_summary", ttl=1800)
+def _fetch_sales_summary():
+    try:
+        rows = _read_sheet_tab(SALES_SHEET_ID, "Sales Summary", max_rows=80)
+    except Exception as e:
+        return {"error": str(e), "cohorts": []}
+
+    def v(row, i):
+        try: return row[i].strip() if len(row) > i else ""
+        except: return ""
+
+    # KPIs from rows 2-6
+    kpis = {}
+    for row in rows[2:7]:
+        label = v(row, 0)
+        val   = v(row, 1)
+        if label and val and label not in ("PIPELINE", "KEY RATES"):
+            kpis[label] = val
+        # Key rates in cols 5-6
+        rate_label = v(row, 5)
+        rate_val   = v(row, 6)
+        if rate_label and rate_val:
+            kpis[rate_label] = rate_val
+
+    # Column headers from row 9
+    headers = rows[9] if len(rows) > 9 else []
+    col_names = [h.strip() for h in headers]
+
+    # Monthly cohort data — rows 11+ with actual month names
+    cohorts = []
+    import re
+    MONTH_PAT = re.compile(r'^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}$')
+    for row in rows[11:]:
+        month = v(row, 0)
+        if not MONTH_PAT.match(month): continue
+        discos = v(row, 1)
+        if not discos or discos == "0": continue   # skip empty future months
+        cohort = {
+            "month":      month,
+            "discos":     v(row, 1),
+            "tim_discos": v(row, 2),
+            "jay_discos": v(row, 3),
+            "trials":     v(row, 4),
+            "trial_pct":  v(row, 5),
+            "offers":     v(row, 6),
+            "offer_pct":  v(row, 7),
+            "won":        v(row, 8),
+            "won_pct":    v(row, 9),
+        }
+        cohorts.append(cohort)
+
+    return {
+        "kpis":    kpis,
+        "cohorts": list(reversed(cohorts)),   # most recent first
+        "updated_at":  datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "data_source": "Google Sheets — Sales Summary tab",
+    }
+
+@app.route("/api/sales-summary")
+def api_sales_summary():
+    _require_key()
+    if request.args.get("force") == "1": _bust_cache("sales_summary")
+    try:
+        return jsonify({"ok": True, "data": _fetch_sales_summary()})
+    except Exception as e:
+        log.error(f"sales-summary error: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @app.route("/")
 def index():
     return render_template("index.html", dashboard_secret=DASHBOARD_SECRET, version="2.0.0")

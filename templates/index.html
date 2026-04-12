@@ -190,6 +190,13 @@
       </button>
     </div>
 
+    <div class="sidebar-section">
+      <div class="sidebar-label">Analytics</div>
+      <button class="nav-item" onclick="showPage('sales-summary')">
+        <span class="nav-icon">📊</span> Sales Summary
+      </button>
+    </div>
+
     <div class="sidebar-footer">
       Built by Alfred · FI-OPS<br>
       Data: HubSpot + Sheets
@@ -294,6 +301,25 @@
       </div>
     </div>
 
+    <!-- ════════════════════════════════════════════
+         PAGE 6: SALES SUMMARY
+    ════════════════════════════════════════════ -->
+    <div class="page" id="page-sales-summary">
+      <div class="page-header">
+        <div>
+          <div class="page-eyebrow">Analytics · Monthly Cohort Analysis · Google Sheets</div>
+          <div class="page-title">Sales Summary</div>
+        </div>
+        <div class="header-actions">
+          <span class="updated-badge" id="sales-summary-updated">—</span>
+          <button class="btn btn-ghost" onclick="reload('sales-summary')">↺ Refresh</button>
+        </div>
+      </div>
+      <div class="page-content" id="sales-summary-content">
+        <div class="loading"><div class="spinner"></div><span>Loading sales summary…</span></div>
+      </div>
+    </div>
+
   </div><!-- /main -->
 </div><!-- /layout -->
 
@@ -325,11 +351,12 @@ function reload(name) {
 
 function loadPage(name, force=false) {
   const endpointMap = {
-    pipeline:    'pipeline-quality',
-    researchers: 'researchers',
-    sdr:         'sdr',
-    ae:          'sales',
-    onboarding:  'onboarding',
+    pipeline:        'pipeline-quality',
+    researchers:     'researchers',
+    sdr:             'sdr',
+    ae:              'sales',
+    onboarding:      'onboarding',
+    'sales-summary': 'sales-summary',
   };
   const endpoint = endpointMap[name];
   fetch(apiUrl(endpoint, force))
@@ -749,6 +776,66 @@ function renderOnboarding(data) {
   html += `</tbody></table></div>`;
 
   document.getElementById('onboarding-content').innerHTML = html;
+}
+
+// ── Sales Summary ─────────────────────────────────────────────────────────────
+function renderSalesSummary(data) {
+  const k = data.kpis || {};
+  let html = `<div class="kpi-grid">
+    <div class="kpi blue"><div class="kpi-label">Total Discos</div><div class="kpi-value">${k['Total Discos']||'—'}</div><div class="kpi-sub">All time</div></div>
+    <div class="kpi teal"><div class="kpi-label">Won</div><div class="kpi-value">${k['Won']||'—'}</div><div class="kpi-sub">Closed Won</div></div>
+    <div class="kpi yellow"><div class="kpi-label">In Evaluation</div><div class="kpi-value">${k['Evaluation']||'—'}</div><div class="kpi-sub">Active pipeline</div></div>
+    <div class="kpi red"><div class="kpi-label">Lost</div><div class="kpi-value">${k['Lost']||'—'}</div><div class="kpi-sub">Closed Lost</div></div>
+    <div class="kpi blue"><div class="kpi-label">Avg MRR</div><div class="kpi-value">${k['Average MRR']||'—'}</div><div class="kpi-sub">Per customer won</div></div>
+    <div class="kpi teal"><div class="kpi-label">Disco → Win</div><div class="kpi-value">${k['Disco→Win % (all)']||k['Disco→Win %(all)']||'—'}</div><div class="kpi-sub">All discos</div></div>
+    <div class="kpi yellow"><div class="kpi-label">Resolved Win %</div><div class="kpi-value">${k['Disco→Win % (resolved)']||k['Disco→Win %(resolved)']||'—'}</div><div class="kpi-sub">Won / (Won+Lost)</div></div>
+    <div class="kpi purple"><div class="kpi-label">Disco → Trial</div><div class="kpi-value">${k['Disco→Trial %']||'—'}</div><div class="kpi-sub">Trial conversion</div></div>
+  </div>`;
+
+  html += `<div class="card">
+    <div class="card-header"><div class="card-title">📅 Monthly Cohort Analysis — Discovery Date → Win</div></div>
+    <table class="fi-table"><thead><tr>
+      <th>Month</th><th>Discos</th><th>Tim</th><th>Jay</th>
+      <th>Trials</th><th>Trial %</th><th>Offers</th><th>Offer %</th><th>Won</th><th>Won %</th>
+    </tr></thead><tbody>`;
+
+  for (const c of data.cohorts) {
+    const wonN = parseInt(c.won) || 0;
+    const discosN = parseInt(c.discos) || 0;
+    const wonCls = wonN > 0 ? 'style="color:var(--green);font-weight:700"' : '';
+    html += `<tr>
+      <td><strong>${c.month}</strong></td>
+      <td>${c.discos}</td>
+      <td>${c.tim_discos||'—'}</td>
+      <td>${c.jay_discos||'—'}</td>
+      <td>${c.trials||'0'}</td>
+      <td>${c.trial_pct||'0%'}</td>
+      <td>${c.offers||'0'}</td>
+      <td>${c.offer_pct||'0%'}</td>
+      <td ${wonCls}>${c.won||'0'}</td>
+      <td ${wonCls}>${c.won_pct||'0%'}</td>
+    </tr>`;
+  }
+  html += `</tbody></table></div>`;
+  document.getElementById('sales-summary-content').innerHTML = html;
+}
+
+// ── Register render function ──────────────────────────────────────────────────
+const _origRenderPage = renderPage;
+// Patch renderPage to handle sales-summary
+const _renderMap = {
+  pipeline:        renderPipeline,
+  researchers:     renderResearchers,
+  sdr:             renderSDR,
+  ae:              renderAE,
+  onboarding:      renderOnboarding,
+  'sales-summary': renderSalesSummary,
+};
+function renderPage(name, data) {
+  const updEl = document.getElementById(name+'-updated');
+  if (updEl) updEl.textContent = data.updated_at || '';
+  const fn = _renderMap[name];
+  if (fn) fn(data);
 }
 
 // ── Auto-load first page on init ─────────────────────────────────────────────

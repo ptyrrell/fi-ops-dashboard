@@ -137,6 +137,82 @@ NATASHA_STAGES = {
 
 KNOWN_RESEARCHERS = ["Tamil","Veera","Mohanapriya","Chinju","Mark Lang","Tim","Jay","Tash","Paul"]
 
+# ── Rule-based ICP scorer (no Claude required) ────────────────────────────────
+# Used for deals that haven't been scored by the Alfred batch scorer yet.
+# Tier A = strong trade/FSM signal, B = moderate, C = unclear, X = disqualified.
+
+_ICP_KEYWORDS_A = [
+    "air con","aircon","hvac","refriger","cool room","coldroom","cold room","chiller",
+    "mechanical services","mechanical service","fire protect","fire sprinkl",
+    "plumb","gas fitt","building services","building service","gas & plumb",
+    "air conditioning","a/c contractor","pest control services",
+    "electrical contractor","electrical services","electrical engineer",
+]
+_ICP_KEYWORDS_B = [
+    "pest control","facilities manage","property mainten","mainten service",
+    "trade service","field service","service tech","service group","technician",
+    "install","service & mainten","asset manag","fleet mainten",
+]
+_ICP_DISQUALIFY = [
+    "software","saas","digital agency","marketing agency","media agency",
+    "restaurant","cafe","hotel","motel","hospitality","retail store","shop pty",
+    "finance","insurance broker","law firm","solicitor","solicitors",
+    "school ","university","college","real estate agency","property group",
+    "consulting group","management consult",
+]
+# HubSpot industry values that map to trade
+_ICP_INDUSTRY_A = {
+    "construction","electrical_electronic_manufacturing",
+    "mechanical_or_industrial_engineering","utilities",
+}
+_ICP_INDUSTRY_B = {
+    "facilities_services","environmental_services","consumer_services",
+    "industrial_automation","real_estate",
+}
+
+
+def _rule_icp_tier(company_name: str, industry: str = "") -> str:
+    """
+    Keyword + industry-based ICP tier for companies without a Claude score.
+    Returns "A", "B", "C", or "X".
+    """
+    name = (company_name or "").lower()
+    ind  = (industry or "").lower().replace(" ", "_")
+
+    for kw in _ICP_DISQUALIFY:
+        if kw in name:
+            return "X"
+
+    for kw in _ICP_KEYWORDS_A:
+        if kw in name:
+            return "A"
+    if ind in _ICP_INDUSTRY_A:
+        return "A"
+
+    for kw in _ICP_KEYWORDS_B:
+        if kw in name:
+            return "B"
+    if ind in _ICP_INDUSTRY_B:
+        return "B"
+
+    return "C"   # not enough info to qualify or disqualify
+
+
+def _effective_icp_tier(deal: dict) -> str:
+    """
+    Return the best available ICP tier for a deal:
+    1. Claude-scored tier from NocoDB (written by Alfred batch scorer)
+    2. Rule-based fallback using company_name + industry
+    """
+    tier = (deal.get("icp_tier") or "").strip()
+    if tier in ("A", "B", "C", "X"):
+        return tier
+    return _rule_icp_tier(
+        deal.get("company_name", ""),
+        deal.get("industry", ""),
+    )
+
+
 # ── Google Sheets client ──────────────────────────────────────────────────────
 
 def _get_sheets_client():
@@ -183,7 +259,7 @@ def _fetch_pipeline_quality():
         no_mob = sum(1 for d in rdl if d.get("is_no_mobile"))
         demos  = sum(1 for d in rdl if d.get("is_demo_booked"))
         won    = sum(1 for d in rdl if d.get("is_won"))
-        icp_ab = sum(1 for d in rdl if (d.get("icp_tier","") or "") in ("A","B"))
+        icp_ab = sum(1 for d in rdl if _effective_icp_tier(d) in ("A","B"))
         phone_ok = active - no_mob
         researcher_stats.append({
             "name":      researcher,
@@ -214,7 +290,7 @@ def _fetch_pipeline_quality():
             "demo_booked":   sum(1 for d in deals if d.get("is_demo_booked")),
             "no_mobile":     sum(1 for d in deals if d.get("is_no_mobile")),
             "won":           sum(1 for d in deals if d.get("is_won")),
-            "icp_ab":        sum(1 for d in deals if (d.get("icp_tier","") or "") in ("A","B")),
+            "icp_ab":        sum(1 for d in deals if _effective_icp_tier(d) in ("A","B")),
             "no_mobile_pct": round(sum(1 for d in deals if d.get("is_no_mobile"))/total*100) if total else 0,
             "last_hs_sync":  last_sync,
         },
@@ -689,6 +765,98 @@ def api_health():
     return jsonify({"ok": True, "version": "2.0.0",
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "data_architecture": "NocoDB + Sheets (HubSpot only for AE pipeline)"})
+
+
+# ── Data: ICP Audit ───────────────────────────────────────────────────────────
+
+@_cached("icp_audit", ttl=3600)
+def _fetch_icp_audit():
+    deals = _noco_get_all(NOCO_DEALS_TABLE)
+
+    # Per-company aggregation (deduplicate by company name)
+    companies: dict = {}
+    for d in deals:
+        cn = (d.get("company_name") or "").strip()
+        if not cn:
+            continue
+        if cn not in companies:
+            companies[cn] = {
+                "company":    cn,
+                "industry":   (d.get("industry") or "").strip(),
+                "claude_tier": (d.get("icp_tier") or "").strip(),   # from Alfred batch scorer
+                "icp_score":  (d.get("icp_score") or "").strip(),
+                "researcher": (d.get("researcher") or "Not set").strip() or "Not set",
+                "lead_count": 0,
+                "demos":      0,
+                "won":        False,
+            }
+        companies[cn]["lead_count"] += 1
+        if d.get("is_demo_booked"):
+            companies[cn]["demos"] += 1
+        if d.get("is_won"):
+            companies[cn]["won"] = True
+
+    # Apply effective tier (Claude if available, else rule-based)
+    tier_counts  = {"A": 0, "B": 0, "C": 0, "X": 0}
+    claude_count = 0
+    rule_count   = 0
+    company_list = []
+
+    for cn, c in companies.items():
+        claude_tier = c["claude_tier"]
+        if claude_tier in ("A","B","C","X"):
+            tier = claude_tier
+            source = "claude"
+            claude_count += 1
+        else:
+            tier = _rule_icp_tier(c["company"], c["industry"])
+            source = "rule"
+            rule_count += 1
+        c["tier"]   = tier
+        c["source"] = source
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
+        company_list.append(c)
+
+    # Sort: A first, then B, C, X; within tier by company name
+    tier_order = {"A": 0, "B": 1, "C": 2, "X": 3}
+    company_list.sort(key=lambda x: (tier_order.get(x["tier"],2), x["company"].lower()))
+
+    total = len(company_list)
+    ab = tier_counts["A"] + tier_counts["B"]
+
+    # Industry breakdown for A + B companies
+    ind_counter: dict = Counter()
+    for c in company_list:
+        if c["tier"] in ("A","B") and c["industry"]:
+            ind_counter[c["industry"]] += 1
+
+    return {
+        "summary": {
+            "total_companies": total,
+            "tier_a": tier_counts["A"],
+            "tier_b": tier_counts["B"],
+            "tier_c": tier_counts["C"],
+            "tier_x": tier_counts["X"],
+            "ab_count": ab,
+            "ab_pct": round(ab / total * 100) if total else 0,
+            "claude_scored": claude_count,
+            "rule_scored": rule_count,
+        },
+        "companies": company_list[:500],   # cap for browser perf
+        "industry_breakdown": dict(ind_counter.most_common(12)),
+        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+    }
+
+
+@app.route("/api/icp-audit")
+def api_icp_audit():
+    if request.args.get("force") == "1":
+        _bust_cache("icp_audit")
+    try:
+        return jsonify({"ok": True, "data": _fetch_icp_audit()})
+    except Exception as e:
+        log.error(f"icp-audit error: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 # ── Data: Sales Summary (Google Sheets — monthly cohort analysis) ─────────────
 # Sheet structure:

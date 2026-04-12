@@ -192,6 +192,9 @@
       <button class="nav-item" onclick="showPage('researchers')">
         <span class="nav-icon">🔬</span> Researcher Review
       </button>
+      <button class="nav-item" onclick="showPage('icp-audit')">
+        <span class="nav-icon">🎯</span> ICP Audit
+      </button>
     </div>
 
     <div class="sidebar-section">
@@ -219,7 +222,7 @@
     </div>
 
     <div class="sidebar-footer">
-      Built by Alfred · FI-OPS<br>
+      Built by Alfred · FI-OPS v2.1<br>
       Data: HubSpot + Sheets
     </div>
   </nav>
@@ -363,6 +366,23 @@
       <div class="page-content" id="sales-summary-content">
         <div class="loading"><div class="spinner"></div><span>Loading sales summary…</span></div>
       </div>
+    <!-- ════════════════════════════════════════════
+         PAGE 7: ICP AUDIT
+    ════════════════════════════════════════════ -->
+    <div class="page" id="page-icp-audit">
+      <div class="page-header">
+        <div>
+          <div class="page-eyebrow">Pipeline · Lead Quality · ICP Scoring</div>
+          <div class="page-title">ICP Audit</div>
+        </div>
+        <div class="header-actions">
+          <span class="updated-badge" id="icp-audit-updated">—</span>
+          <button class="btn btn-ghost" onclick="reload('icp-audit')">↺ Refresh</button>
+        </div>
+      </div>
+      <div class="page-content" id="icp-audit-content">
+        <div class="loading"><div class="spinner"></div><span>Loading ICP audit…</span></div>
+      </div>
     </div>
 
   </div><!-- /main -->
@@ -402,6 +422,7 @@ function loadPage(name, force=false) {
     ae:              'sales',
     onboarding:      'onboarding',
     'sales-summary': 'sales-summary',
+    'icp-audit':     'icp-audit',
   };
   const endpoint = endpointMap[name];
   fetch(apiUrl(endpoint, force))
@@ -1106,12 +1127,185 @@ const _renderMap = {
   ae:              renderAE,
   onboarding:      renderOnboarding,
   'sales-summary': renderSalesSummary,
+  'icp-audit':     renderIcpAudit,
 };
 function renderPage(name, data) {
   const updEl = document.getElementById(name+'-updated');
   if (updEl) updEl.textContent = data.updated_at || '';
   const fn = _renderMap[name];
   if (fn) fn(data);
+}
+
+// ── ICP Audit renderer ───────────────────────────────────────────────────────
+function renderIcpAudit(data) {
+  const s   = data.summary;
+  const cos = data.companies || [];
+
+  const TIER_META = {
+    A: { label:'Tier A — Prioritise', color:'var(--green)',  bg:'rgba(16,185,129,.12)', desc:'Strong ICP fit · trade company, right size, AU' },
+    B: { label:'Tier B — Nurture',    color:'var(--amber)',  bg:'rgba(245,158,11,.12)',  desc:'Moderate fit · worth pursuing' },
+    C: { label:'Tier C — Low',        color:'#94a3b8',       bg:'rgba(148,163,184,.10)', desc:'Unclear fit · not enough signal' },
+    X: { label:'Disqualified',        color:'var(--red)',    bg:'rgba(239,68,68,.10)',   desc:'Wrong industry, size, or geography' },
+  };
+
+  const abPctCls = s.ab_pct >= 50 ? 'good' : s.ab_pct >= 30 ? 'warn' : 'bad';
+  const methodNote = s.claude_scored > 0
+    ? `${s.claude_scored} companies scored by Claude (Alfred) · ${s.rule_scored} estimated by keyword matcher`
+    : `${s.rule_scored} companies estimated by keyword matcher · run Alfred ICP batch score for Claude-quality results`;
+
+  let html = `
+  <div style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);border-radius:10px;padding:12px 16px;font-size:12.5px;color:#94a3b8;margin-bottom:18px">
+    🎯 <strong style="color:#c7d2fe">ICP definition:</strong> Australian trade companies · HVAC, refrigeration, plumbing, electrical, fire protection · 5–100 employees · B2B field service<br>
+    <span style="color:#64748b;margin-top:4px;display:block">${methodNote}</span>
+  </div>
+
+  <div class="kpi-grid">
+    <div class="kpi green">
+      <div class="kpi-label">Tier A · Prioritise</div>
+      <div class="kpi-value">${s.tier_a}</div>
+      <div class="kpi-sub">Strong ICP match</div>
+    </div>
+    <div class="kpi amber">
+      <div class="kpi-label">Tier B · Nurture</div>
+      <div class="kpi-value">${s.tier_b}</div>
+      <div class="kpi-sub">Worth pursuing</div>
+    </div>
+    <div class="kpi" style="--kpi-accent:#94a3b8">
+      <div class="kpi-label">Tier C · Low signal</div>
+      <div class="kpi-value">${s.tier_c}</div>
+      <div class="kpi-sub">Unclear fit</div>
+    </div>
+    <div class="kpi red">
+      <div class="kpi-label">Disqualified</div>
+      <div class="kpi-value">${s.tier_x}</div>
+      <div class="kpi-sub">Wrong profile</div>
+    </div>
+    <div class="kpi ${abPctCls === 'good' ? 'green' : abPctCls === 'warn' ? 'amber' : 'red'}" style="grid-column:span 2">
+      <div class="kpi-label">A+B Pipeline Quality</div>
+      <div class="kpi-value"><span class="pct-num ${abPctCls}">${s.ab_pct}%</span></div>
+      <div class="kpi-sub">${s.ab_count} of ${s.total_companies} companies match ICP</div>
+    </div>
+  </div>
+
+  <div class="two-col">`;
+
+  // Tier breakdown visual
+  html += `
+    <div class="card">
+      <div class="card-header"><div class="card-title">📊 Tier Breakdown</div></div>`;
+
+  const total = s.total_companies || 1;
+  for (const [t, meta] of Object.entries(TIER_META)) {
+    const count = s['tier_' + t.toLowerCase()] || 0;
+    const pct   = Math.round(count / total * 100);
+    html += `
+      <div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+          <span style="font-size:13px;font-weight:600;color:${meta.color}">${meta.label}</span>
+          <span style="font-size:13px;font-weight:700;color:${meta.color}">${count} <span style="font-weight:400;color:#64748b;font-size:11px">${pct}%</span></span>
+        </div>
+        <div style="background:#1e2a3a;border-radius:4px;height:8px;overflow:hidden">
+          <div style="height:100%;background:${meta.color};width:${pct}%;border-radius:4px;transition:width .4s"></div>
+        </div>
+        <div style="font-size:11px;color:#64748b;margin-top:3px">${meta.desc}</div>
+      </div>`;
+  }
+  html += `</div>`;
+
+  // Industry breakdown
+  const indEntries = Object.entries(data.industry_breakdown || {});
+  if (indEntries.length) {
+    const indTotal = indEntries.reduce((s,[,v])=>s+v, 0) || 1;
+    html += `
+    <div class="card">
+      <div class="card-header"><div class="card-title">🏭 Industry Mix (Tier A+B)</div></div>`;
+    for (const [ind, cnt] of indEntries) {
+      const p = Math.round(cnt / indTotal * 100);
+      const label = ind.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+      html += `<li class="stage-item">
+        <span class="stage-name">${label}</span>
+        <div class="stage-bar-wrap"><div class="stage-bar" style="background:var(--accent);width:${Math.min(p*4,100)}%"></div></div>
+        <span class="stage-count">${cnt}</span>
+        <span class="stage-pct">${p}%</span>
+      </li>`;
+    }
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+
+  // Company table — filter state
+  html += `
+  <div class="card" style="margin-top:0">
+    <div class="card-header" style="flex-wrap:wrap;gap:10px">
+      <div><div class="card-title">🏢 Companies by ICP Tier</div>
+        <div class="card-subtitle">Sorted A → B → C → X · showing top ${Math.min(cos.length,500)}</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:12px;color:#94a3b8">Filter:</span>
+        ${['All','A','B','C','X'].map(t=>`<button class="btn btn-ghost icp-filter-btn${t==='All'?' active':''}" onclick="filterIcpTable('${t}')" style="padding:3px 10px;font-size:12px">${t}</button>`).join('')}
+        <input id="icp-search" oninput="filterIcpTable()" placeholder="Search company…" style="padding:4px 10px;border-radius:6px;border:1px solid #334155;background:#1e2a3a;color:#e2e8f0;font-size:12px;width:160px">
+      </div>
+    </div>
+    <table class="fi-table" id="icp-company-table">
+      <thead>
+        <tr>
+          <th>Company</th>
+          <th>Industry</th>
+          <th class="right">Tier</th>
+          <th class="right">Source</th>
+          <th class="right">Leads</th>
+          <th class="right">Demos</th>
+          <th class="right">Won</th>
+        </tr>
+      </thead>
+      <tbody id="icp-company-tbody"></tbody>
+    </table>
+  </div>`;
+
+  document.getElementById('icp-audit-content').innerHTML = html;
+
+  // Store companies globally for filtering
+  window._icpCompanies = cos;
+  window._icpTierFilter = 'All';
+  filterIcpTable('All');
+}
+
+function filterIcpTable(tier) {
+  if (tier !== undefined) {
+    window._icpTierFilter = tier;
+    document.querySelectorAll('.icp-filter-btn').forEach(b => {
+      b.classList.toggle('active', b.textContent.trim() === tier);
+    });
+  }
+  const search = (document.getElementById('icp-search')?.value || '').toLowerCase();
+  const tf = window._icpTierFilter || 'All';
+  const TIER_COLORS = {A:'var(--green)', B:'var(--amber)', C:'#94a3b8', X:'var(--red)'};
+
+  const rows = (window._icpCompanies || []).filter(c => {
+    if (tf !== 'All' && c.tier !== tf) return false;
+    if (search && !c.company.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  const tbody = document.getElementById('icp-company-tbody');
+  if (!tbody) return;
+  tbody.innerHTML = rows.slice(0, 300).map(c => {
+    const tc = TIER_COLORS[c.tier] || '#94a3b8';
+    const ind = (c.industry || '—').replace(/_/g,' ');
+    const src = c.source === 'claude'
+      ? `<span style="font-size:11px;background:rgba(99,102,241,.2);color:#a5b4fc;padding:1px 6px;border-radius:4px">Claude</span>`
+      : `<span style="font-size:11px;background:rgba(148,163,184,.15);color:#94a3b8;padding:1px 6px;border-radius:4px">keyword</span>`;
+    return `<tr>
+      <td class="bold">${c.company}</td>
+      <td style="color:#94a3b8;font-size:12px">${ind}</td>
+      <td class="right"><span style="font-weight:700;color:${tc}">${c.tier}</span></td>
+      <td class="right">${src}</td>
+      <td class="right mono">${c.lead_count}</td>
+      <td class="right mono">${c.demos || 0}</td>
+      <td class="right mono">${c.won ? '✓' : '—'}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7" style="text-align:center;color:#64748b;padding:24px">No companies match this filter</td></tr>';
 }
 
 // ── Auto-load first page on init ─────────────────────────────────────────────

@@ -594,7 +594,28 @@ function _applyResearcherFilter() {
   const [y, m] = _researcherMonth.split('-').map(Number);
   const end   = `${_researcherMonth}-${new Date(y, m, 0).getDate()}`;
   const filtered  = filterRows(_researcherData.all_rows, start, end);
-  const totals     = aggregateRows(filtered);
+
+  // Aggregate sheet rows (gives leads + days per researcher for the filtered period)
+  const sheetTotals = aggregateRows(filtered);
+
+  // Merge back NocoDB phone/ICP data (pipeline-level, not month-specific)
+  // Note: phone/ICP are pipeline totals, not monthly, so they're the same regardless of period
+  const nocoByName = {};
+  for (const r of (_researcherData.totals || [])) {
+    nocoByName[r.name.toLowerCase()] = r;
+  }
+  const totals = sheetTotals.map(r => {
+    const noco = nocoByName[r.name.toLowerCase()] || {};
+    return {
+      ...r,
+      phone_count: noco.phone_count,
+      phone_pct:   noco.phone_pct,
+      icp_ab:      noco.icp_ab,
+      icp_pct:     noco.icp_pct,
+      noco_total:  noco.noco_total,
+    };
+  });
+
   const recentRows = [...filtered].sort((a,b) => (b.iso_date||'').localeCompare(a.iso_date||''));
   _renderResearcherTable(totals, recentRows, _fmtMonthRange(_researcherMonth));
 }
@@ -694,19 +715,32 @@ function renderPipeline(data) {
         </thead>
         <tbody>`;
 
+  // Store ICP breakdown data for drill-down
+  window._pipelineIcpIndustry    = data.icp_industry     || {};
+  window._pipelineNonIcpIndustry = data.non_icp_industry || {};
+
   for (const r of data.by_researcher) {
     const phoneCls = pctClass(r.phone_pct, 75, 50);
     const icpCls   = pctClass(r.icp_pct, 60, 40);
+    const rowId = 'icp-drilldown-' + r.name.replace(/\s+/g,'_');
     html += `
           <tr class="researcher-row">
             <td class="bold">${r.name}</td>
             <td class="right mono">${r.total}</td>
             <td class="right mono">${r.active}</td>
             <td class="right pct-cell"><span class="pct-num ${phoneCls}">${r.phone_pct}%</span></td>
-            <td class="right pct-cell"><span class="pct-num ${icpCls}">${r.icp_pct}%</span></td>
+            <td class="right pct-cell" style="cursor:pointer" onclick="toggleIcpDrilldown('${rowId}')" title="Click for industry breakdown">
+              <span class="pct-num ${icpCls}">${r.icp_pct}%</span>
+              <span style="font-size:10px;color:#64748b;margin-left:3px">▾</span>
+            </td>
             <td class="right mono">${r.demos}</td>
             <td class="right mono">${r.won}</td>
             <td class="right pct-cell"><span class="pct-num ${pctClass(r.win_rate,5,2)}">${r.win_rate}%</span></td>
+          </tr>
+          <tr id="${rowId}" style="display:none">
+            <td colspan="8" style="padding:0">
+              <div id="${rowId}-content" style="padding:12px 16px;background:rgba(15,23,42,.6);border-top:1px solid #1e2a3a"></div>
+            </td>
           </tr>`;
   }
 
@@ -758,6 +792,58 @@ function renderPipeline(data) {
   document.getElementById('pipeline-content').innerHTML = html;
 }
 
+function toggleIcpDrilldown(rowId) {
+  const row = document.getElementById(rowId);
+  if (!row) return;
+  const isOpen = row.style.display !== 'none';
+  row.style.display = isOpen ? 'none' : 'table-row';
+  if (!isOpen) {
+    _renderIcpDrilldown(document.getElementById(rowId + '-content'));
+  }
+}
+
+function _renderIcpDrilldown(container) {
+  if (!container) return;
+  const icp    = window._pipelineIcpIndustry    || {};
+  const nonIcp = window._pipelineNonIcpIndustry || {};
+
+  const icpEntries    = Object.entries(icp).sort((a,b) => b[1]-a[1]).slice(0,10);
+  const nonIcpEntries = Object.entries(nonIcp).sort((a,b) => b[1]-a[1]).slice(0,10);
+
+  const icpTotal    = icpEntries.reduce((s,[,v])=>s+v, 0)    || 1;
+  const nonIcpTotal = nonIcpEntries.reduce((s,[,v])=>s+v, 0) || 1;
+
+  function makeBar(entries, total, color) {
+    return entries.map(([ind, cnt]) => {
+      const pct = Math.round(cnt / total * 100);
+      return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
+        <div style="width:160px;font-size:12px;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${ind}">${ind}</div>
+        <div style="flex:1;background:#1e2a3a;border-radius:3px;height:7px;overflow:hidden">
+          <div style="width:${Math.min(pct*3,100)}%;height:100%;background:${color};border-radius:3px"></div>
+        </div>
+        <div style="width:30px;text-align:right;font-size:11px;font-weight:700;color:${color}">${cnt}</div>
+        <div style="width:26px;text-align:right;font-size:11px;color:#64748b">${pct}%</div>
+      </div>`;
+    }).join('');
+  }
+
+  container.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--green);margin-bottom:10px">
+          ✅ ICP A+B Industries (${icpTotal} companies)
+        </div>
+        ${icpEntries.length ? makeBar(icpEntries, icpTotal, 'var(--green)') : '<div style="color:#64748b;font-size:12px">No ICP companies scored yet</div>'}
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:10px">
+          ❌ Non-ICP Industries (${nonIcpTotal} companies)
+        </div>
+        ${nonIcpEntries.length ? makeBar(nonIcpEntries, nonIcpTotal, '#475569') : '<div style="color:#64748b;font-size:12px">No data</div>'}
+      </div>
+    </div>`;
+}
+
 // ── RENDER: Researcher Review ────────────────────────────────────────────────
 function renderResearchers(data) {
   if (data.error) {
@@ -775,24 +861,34 @@ function renderResearchers(data) {
 
 function _renderResearcherTable(totals, recentRows, label) {
   const totalsArr = totals || [];
-  let totalLeads=0, totalDials=0, totalConnects=0, totalDemos=0;
+  let totalLeads = 0, totalPhoneCount = 0, totalIcpAb = 0;
   for (const r of totalsArr) {
-    totalLeads+=r.leads; totalDials+=r.dials; totalConnects+=r.connects; totalDemos+=r.demos;
+    totalLeads     += r.leads       || 0;
+    totalPhoneCount+= r.phone_count || 0;
+    totalIcpAb     += r.icp_ab      || 0;
   }
+  const totalIcpPct   = totalLeads ? Math.round(totalIcpAb / totalLeads * 100) : 0;
+  const totalPhonePct = totalLeads ? Math.round(totalPhoneCount / totalLeads * 100) : 0;
 
   const periodLabel = label === 'All Time' ? (_researcherData?.date_range || 'All Time') : label;
 
-  let html = `
+  // Debug: show date parse info if available
+  const debugNote = (_researcherData?.total_rows > 0 && _researcherData?.parsed_dates === 0)
+    ? `<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:10px 14px;font-size:12px;color:#fca5a5;margin-bottom:14px">
+        ⚠️ Date parse issue: ${_researcherData.total_rows} rows found but 0 dates parsed from format "${_researcherData.all_rows?.[0]?.date || '?'}". Daily breakdown unavailable.
+       </div>` : '';
+
+  let html = debugNote + `
   <div class="kpi-grid">
-    <div class="kpi blue"><div class="kpi-label">Total Leads</div><div class="kpi-value">${totalLeads.toLocaleString()}</div><div class="kpi-sub">${periodLabel}</div></div>
-    <div class="kpi teal"><div class="kpi-label">Total Dials</div><div class="kpi-value">${totalDials.toLocaleString()}</div><div class="kpi-sub">All researchers</div></div>
-    <div class="kpi green"><div class="kpi-label">Connects</div><div class="kpi-value">${totalConnects}</div><div class="kpi-sub">${totalDials ? Math.round(totalConnects/totalDials*100) : 0}% connect rate</div></div>
-    <div class="kpi purple"><div class="kpi-label">Demos Set</div><div class="kpi-value">${totalDemos}</div><div class="kpi-sub">${totalConnects ? Math.round(totalDemos/totalConnects*100) : 0}% from connects</div></div>
+    <div class="kpi blue"><div class="kpi-label">Leads Added</div><div class="kpi-value">${totalLeads.toLocaleString()}</div><div class="kpi-sub">${periodLabel}</div></div>
+    <div class="kpi teal"><div class="kpi-label">With Phone #</div><div class="kpi-value">${totalPhoneCount.toLocaleString()}</div><div class="kpi-sub">${totalPhonePct}% of pipeline</div></div>
+    <div class="kpi green"><div class="kpi-label">ICP A+B</div><div class="kpi-value">${totalIcpAb.toLocaleString()}</div><div class="kpi-sub">${totalIcpPct}% match ICP</div></div>
   </div>
 
   <div class="card">
     <div class="card-header">
       <div class="card-title">🔬 Researcher Performance <span style="font-size:11px;font-weight:500;color:var(--text-muted);margin-left:6px">${label}</span></div>
+      <div class="card-subtitle">Phone # and ICP% sourced from HubSpot pipeline · Leads from Google Sheets</div>
     </div>
     <table class="fi-table">
       <thead>
@@ -800,30 +896,29 @@ function _renderResearcherTable(totals, recentRows, label) {
           <th>Researcher</th>
           <th class="right">Days</th>
           <th class="right">Leads</th>
-          <th class="right">Dials</th>
-          <th class="right">Emails</th>
-          <th class="right">Connects</th>
-          <th class="right">Connect%</th>
-          <th class="right">Demos</th>
-          <th class="right">Demo%</th>
+          <th class="right">With Phone #</th>
+          <th class="right">Phone%</th>
+          <th class="right">ICP A+B</th>
+          <th class="right">ICP%</th>
         </tr>
       </thead>
       <tbody>`;
 
   if (!totalsArr.length) {
-    html += `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:24px">No data for this period</td></tr>`;
+    html += `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">No data for this period</td></tr>`;
   } else {
     for (const r of totalsArr) {
+      const phoneCls = pctClass(r.phone_pct || 0, 75, 50);
+      const icpCls   = pctClass(r.icp_pct   || 0, 50, 30);
+      const phoneTip = r.noco_total > 0 ? `title="From ${r.noco_total} deals in HubSpot pipeline"` : '';
       html += `<tr class="researcher-row">
         <td class="bold">${r.name}</td>
-        <td class="right mono muted">${r.days}</td>
+        <td class="right mono muted">${r.days || '—'}</td>
         <td class="right mono">${r.leads}</td>
-        <td class="right mono">${r.dials}</td>
-        <td class="right mono">${r.emails ?? '—'}</td>
-        <td class="right mono">${r.connects}</td>
-        <td class="right"><span class="pct-num ${pctClass(r.connect_rate,30,15)}">${r.connect_rate}%</span></td>
-        <td class="right mono">${r.demos}</td>
-        <td class="right"><span class="pct-num ${pctClass(r.demo_rate,20,10)}">${r.demo_rate}%</span></td>
+        <td class="right mono" ${phoneTip}>${r.phone_count || '—'}</td>
+        <td class="right pct-cell"><span class="pct-num ${phoneCls}">${r.phone_pct != null ? r.phone_pct + '%' : '—'}</span></td>
+        <td class="right mono">${r.icp_ab || '—'}</td>
+        <td class="right pct-cell"><span class="pct-num ${icpCls}">${r.icp_pct != null ? r.icp_pct + '%' : '—'}</span></td>
       </tr>`;
     }
   }
@@ -834,7 +929,11 @@ function _renderResearcherTable(totals, recentRows, label) {
   <div class="card">
     <div class="card-header"><div class="card-title">📅 ${recentTitle}</div></div>
     <table class="fi-table">
-      <thead><tr><th>Date</th><th>Rep</th><th class="right">Leads</th><th class="right">Dials</th><th class="right">Emails</th><th class="right">Connects</th><th class="right">Demos</th></tr></thead>
+      <thead><tr>
+        <th>Date</th>
+        <th>Researcher</th>
+        <th class="right">Leads</th>
+      </tr></thead>
       <tbody>`;
 
   const displayRows = label === 'All Time'
@@ -842,17 +941,13 @@ function _renderResearcherTable(totals, recentRows, label) {
     : (recentRows||[]).slice(0, 60);
 
   if (!displayRows.length) {
-    html += `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px">No activity recorded for this period</td></tr>`;
+    html += `<tr><td colspan="3" style="text-align:center;color:var(--text-muted);padding:24px">No activity recorded for this period</td></tr>`;
   } else {
     for (const r of displayRows) {
       html += `<tr>
         <td class="muted mono">${r.date}</td>
         <td class="bold">${r.rep}</td>
-        <td class="right mono">${r.leads||'—'}</td>
-        <td class="right mono">${r.dials||'—'}</td>
-        <td class="right mono">${r.emails||'—'}</td>
-        <td class="right mono">${r.connects||'—'}</td>
-        <td class="right mono">${r.demos||'—'}</td>
+        <td class="right mono">${r.leads || '—'}</td>
       </tr>`;
     }
   }

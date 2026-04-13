@@ -266,6 +266,7 @@ def _fetch_pipeline_quality():
             "total":     total,
             "active":    active,
             "no_mobile": no_mob,
+            "phone_ok":  phone_ok,
             "phone_pct": round(phone_ok/active*100) if active else 0,
             "demos":     demos,
             "won":       won,
@@ -281,6 +282,18 @@ def _fetch_pipeline_quality():
     # Get last synced_at
     synced_ats = [d.get("synced_at","") for d in deals if d.get("synced_at")]
     last_sync  = max(synced_ats) if synced_ats else "Never"
+
+    # ICP industry breakdown for the drill-down click
+    icp_ind     = Counter()
+    non_icp_ind = Counter()
+    for d in deals:
+        tier = _effective_icp_tier(d)
+        ind  = (d.get("industry") or "").strip() or "Unknown"
+        ind_label = ind.replace("_", " ").title() if ind != "Unknown" else "Unknown / Not Set"
+        if tier in ("A", "B"):
+            icp_ind[ind_label] += 1
+        else:
+            non_icp_ind[ind_label] += 1
 
     return {
         "summary": {
@@ -308,6 +321,8 @@ def _fetch_pipeline_quality():
              "sdr": d.get("sdr",""), "stage": d.get("stage","")}
             for d in deals if d.get("is_demo_booked")
         ][:20],
+        "icp_industry":     dict(icp_ind.most_common(12)),
+        "non_icp_industry": dict(non_icp_ind.most_common(12)),
         "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "data_source": "NocoDB (synced from HubSpot)",
     }
@@ -328,12 +343,18 @@ def _parse_sheet_date(raw: str):
     for fmt in (
         "%a, %b %d, %Y",   # Mon, Apr 12, 2026
         "%A, %B %d, %Y",   # Monday, April 12, 2026
-        "%d/%m/%Y",         # 12/04/2026
-        "%m/%d/%Y",         # 04/12/2026
-        "%Y-%m-%d",         # 2026-04-12
+        "%a %b %d %Y",     # Mon Apr 12 2026 (no comma)
+        "%d/%m/%Y",         # 12/04/2026  (AU default)
+        "%m/%d/%Y",         # 04/12/2026  (US)
+        "%Y-%m-%d",         # 2026-04-12  (ISO)
         "%d %b %Y",         # 12 Apr 2026
         "%d %B %Y",         # 12 April 2026
         "%b %d, %Y",        # Apr 12, 2026
+        "%B %d, %Y",        # April 12, 2026
+        "%d-%b-%Y",         # 12-Apr-2026
+        "%d-%b-%y",         # 12-Apr-26
+        "%d/%m/%y",         # 12/04/26
+        "%m/%d/%y",         # 04/12/26
     ):
         try:
             return datetime.strptime(s, fmt).date()
@@ -417,14 +438,27 @@ def _fetch_researcher_activity():
             "demos":    n(row,8),
         })
 
+    # Merge NocoDB pipeline stats (phone% + ICP%) per researcher
+    try:
+        pq = _fetch_pipeline_quality()
+        noco_by_lower = {r["name"].lower(): r for r in pq.get("by_researcher", [])}
+    except Exception as e:
+        log.warning(f"Could not fetch pipeline quality for researcher merge: {e}")
+        noco_by_lower = {}
+
     totals = []
     for name, stats in by_researcher.items():
+        noco = noco_by_lower.get(name.lower(), {})
         totals.append({
-            "name": name, "leads": stats["leads"], "dials": stats["dials"],
-            "emails": stats["emails"], "connects": stats["connects"],
-            "demos": stats["demos"], "days": stats["days"],
-            "connect_rate": round(stats["connects"]/stats["dials"]*100) if stats["dials"] else 0,
-            "demo_rate":    round(stats["demos"]/stats["connects"]*100) if stats["connects"] else 0,
+            "name":        name,
+            "leads":       stats["leads"],
+            "days":        stats["days"],
+            # Phone + ICP come from NocoDB pipeline data
+            "phone_count": noco.get("phone_ok", 0),
+            "phone_pct":   noco.get("phone_pct", 0),
+            "icp_ab":      noco.get("icp_ab", 0),
+            "icp_pct":     noco.get("icp_pct", 0),
+            "noco_total":  noco.get("total", 0),
         })
 
     date_range_start = all_dates[0]  if all_dates else "—"
@@ -449,12 +483,18 @@ def _fetch_researcher_activity():
             "demos":    n(row, 8),
         })
 
+    parsed_count = sum(1 for r in all_rows_export if r.get("iso_date"))
+    log.info(f"Researcher activity: {len(all_rows_export)} rows, {parsed_count} with parsed dates, "
+             f"sample date = {all_rows_export[0]['date'] if all_rows_export else 'none'}")
+
     return {
-        "totals":     totals,
-        "recent":     recent,
-        "all_rows":   all_rows_export,
-        "date_range": f"{date_range_start} – {date_range_end}",
-        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "totals":       totals,
+        "recent":       recent,
+        "all_rows":     all_rows_export,
+        "date_range":   f"{date_range_start} – {date_range_end}",
+        "parsed_dates": parsed_count,
+        "total_rows":   len(all_rows_export),
+        "updated_at":   datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
 
 # ── Data: SDR Review (NocoDB for pipeline, Sheets for call activity) ──────────

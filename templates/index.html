@@ -161,6 +161,8 @@
     .picker-prevnext button:hover { border-color: var(--accent); color: var(--accent); }
     .picker-range-label { font-size: 12px; font-weight: 700; color: var(--text-muted); white-space: nowrap; font-family: 'DM Mono', monospace; }
 
+    .inline-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+
     /* ── RESPONSIVE ── */
     @media (max-width: 900px) {
       .sidebar { width: 200px; }
@@ -170,6 +172,12 @@
     @media (max-width: 640px) {
       .sidebar { display: none; }
       .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+      .inline-two-col { grid-template-columns: 1fr; }
+      .picker-bar { padding: 10px 16px; gap: 8px; }
+    }
+    @media (max-width: 400px) {
+      .kpi-grid { grid-template-columns: 1fr; }
+      .page-content { padding: 12px; }
     }
   </style>
 </head>
@@ -828,7 +836,7 @@ function _renderIcpDrilldown(container) {
   }
 
   container.innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+    <div class="inline-two-col">
       <div>
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--green);margin-bottom:10px">
           ✅ ICP A+B Industries (${icpTotal} companies)

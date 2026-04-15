@@ -25,6 +25,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+APP_VERSION = "v1.2.0"
+
 app = Flask(__name__)
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -802,7 +804,7 @@ def api_onboarding():
 
 @app.route("/api/health")
 def api_health():
-    return jsonify({"ok": True, "version": "2.0.0",
+    return jsonify({"ok": True, "version": APP_VERSION,
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "data_architecture": "NocoDB + Sheets (HubSpot only for AE pipeline)"})
 
@@ -974,11 +976,15 @@ def api_sales_summary():
 
 @app.route("/")
 def index():
-    return render_template("index.html", dashboard_secret=DASHBOARD_SECRET, version="2.0.0")
+    return render_template(
+        "index.html",
+        dashboard_secret=DASHBOARD_SECRET,
+        app_version=APP_VERSION,
+    )
 
 @app.route("/health")
 def health():
-    return "OK", 200
+    return jsonify({"ok": True, "version": APP_VERSION})
 
 if __name__ == "__main__":
     app.run(debug=True, port=int(os.getenv("PORT", 5000)))

@@ -229,6 +229,35 @@
       .page-content { padding: 12px; }
       .layout { flex-direction: column; }
     }
+
+    /* ── Candidate Audit ──────────────────────────────────────────────────── */
+    .cand-tab { padding: 7px 16px; border-radius: 20px; font-size: 12px; font-weight: 600;
+                background: #1f2937; color: #9ca3af; border: 1px solid #374151; cursor: pointer;
+                transition: all 0.15s; }
+    .cand-tab:hover { background: #374151; color: #d1d5db; }
+    .cand-tab.active { background: #1e3a5f; color: #60a5fa; border-color: #1e3a8a; }
+    .cand-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+                 padding: 18px; display: flex; flex-direction: column; gap: 10px;
+                 transition: box-shadow 0.2s; }
+    .cand-card:hover { box-shadow: 0 0 0 1px #1e3a5f; }
+    .cand-name { font-size: 15px; font-weight: 700; color: #f9fafb; }
+    .cand-meta { font-size: 12px; color: #9ca3af; }
+    .cand-role-badge { display: inline-block; font-size: 11px; font-weight: 700;
+                       padding: 3px 10px; border-radius: 12px; }
+    .cand-role-SDR        { background: #1e3a5f; color: #60a5fa; }
+    .cand-role-AE         { background: #1a2e1a; color: #4ade80; }
+    .cand-role-Researcher { background: #2d1a3d; color: #a78bfa; }
+    .cand-role-Pending    { background: #292524; color: #a8a29e; }
+    .cand-score-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .cand-score-lbl { font-size: 11px; color: #6b7280; min-width: 36px; }
+    .cand-score-val { font-size: 14px; font-weight: 700; color: #f9fafb; }
+    .cand-rec { font-size: 12px; font-weight: 600; }
+    .rec-strong-yes { color: #4ade80; } .rec-yes { color: #86efac; }
+    .rec-maybe { color: #fbbf24; } .rec-no { color: #f87171; }
+    .cand-notes { font-size: 12px; color: #9ca3af; line-height: 1.5; }
+    .cand-skills { display: flex; flex-wrap: wrap; gap: 4px; }
+    .cand-skill-tag { font-size: 10px; background: #1f2937; color: #9ca3af;
+                      padding: 2px 8px; border-radius: 10px; border: 1px solid #374151; }
   </style>
 </head>
 <body>
@@ -290,8 +319,15 @@
       </button>
     </div>
 
+    <div class="sidebar-section">
+      <div class="sidebar-label">HR</div>
+      <button class="nav-item" onclick="showPage('candidates')">
+        <span class="nav-icon">👤</span> Candidate Audit
+      </button>
+    </div>
+
     <div class="sidebar-footer">
-      Built by Alfred · FI-OPS v2.4<br>
+      Built by Alfred · FI-OPS v2.5<br>
       Data: HubSpot + Sheets
     </div>
   </nav>
@@ -453,6 +489,138 @@
         <div class="loading"><div class="spinner"></div><span>Loading ICP audit…</span></div>
       </div>
     </div>
+
+    <!-- ════════════════════════════════════════════
+         PAGE: CANDIDATE AUDIT
+    ════════════════════════════════════════════ -->
+    <div class="page" id="page-candidates">
+      <div class="page-header">
+        <div>
+          <div class="page-eyebrow">HR · NocoDB · Employee Nirvana</div>
+          <h1 class="page-title">Candidate Audit</h1>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <a href="https://app.nocodb.com/wq62ewzr/ptha3v85jd54lva" target="_blank"
+             style="font-size:12px;color:#60a5fa;text-decoration:none;border:1px solid #374151;
+                    padding:6px 12px;border-radius:6px;white-space:nowrap">
+            🗃 Open in NocoDB ↗
+          </a>
+          <button onclick="reloadCandidates()" style="font-size:12px;background:#1e3a5f;color:#60a5fa;
+                  border:1px solid #1e3a8a;padding:6px 12px;border-radius:6px;cursor:pointer">
+            ↺ Refresh
+          </button>
+        </div>
+      </div>
+
+      <!-- Role filter tabs -->
+      <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">
+        <button class="cand-tab active" onclick="filterCandidates('all',this)">All</button>
+        <button class="cand-tab" onclick="filterCandidates('SDR',this)">SDR</button>
+        <button class="cand-tab" onclick="filterCandidates('AE',this)">AE</button>
+        <button class="cand-tab" onclick="filterCandidates('Researcher',this)">Researcher</button>
+        <button class="cand-tab" onclick="filterCandidates('Pending Claude Review',this)"
+                style="margin-left:auto">⏳ Pending</button>
+      </div>
+
+      <!-- Candidate cards -->
+      <div id="candidate-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px"></div>
+      <div id="candidate-loading" class="loading" style="display:none"><div class="spinner"></div><span>Loading candidates…</span></div>
+
+      <!-- Upload new resume -->
+      <div class="card" style="margin-top:28px;border:1px dashed #374151">
+        <div class="card-header" style="cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'">
+          <span class="card-title">➕ Add New Candidate (Upload Resume)</span>
+          <span style="font-size:12px;color:#6b7280">Click to expand</span>
+        </div>
+        <div id="upload-section" style="display:none;padding:0 20px 20px">
+          <p style="font-size:13px;color:#9ca3af;margin:12px 0 16px">
+            Upload a PDF, DOCX, or TXT resume/cover letter. The system will extract the text,
+            auto-detect the likely role, and create a NocoDB record with <strong>Pending Claude Review</strong> status.
+            Then send the extracted text to <strong>Alfred on WhatsApp</strong> for full Claude scoring.
+          </p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <div>
+              <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px">Candidate Name (optional)</label>
+              <input id="cand-name-input" type="text" placeholder="e.g. Jane Smith"
+                     style="background:#1f2937;border:1px solid #374151;color:#f9fafb;
+                            padding:8px 12px;border-radius:6px;font-size:13px;width:200px">
+            </div>
+            <div>
+              <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px">Resume / Cover Letter File</label>
+              <input id="cand-file-input" type="file" accept=".pdf,.docx,.txt"
+                     style="background:#1f2937;border:1px solid #374151;color:#9ca3af;
+                            padding:7px 10px;border-radius:6px;font-size:12px;max-width:280px">
+            </div>
+            <button onclick="uploadResume()"
+                    style="background:#1d4ed8;color:#fff;border:none;padding:9px 18px;
+                           border-radius:6px;font-size:13px;cursor:pointer;font-weight:600">
+              Upload &amp; Preview →
+            </button>
+          </div>
+          <!-- Upload result -->
+          <div id="upload-result" style="display:none;margin-top:16px"></div>
+        </div>
+      </div>
+
+      <!-- NocoDB Views How-To -->
+      <div class="card" style="margin-top:16px">
+        <div class="card-header">
+          <span class="card-title">🗂 How to Create NocoDB Filtered Views</span>
+        </div>
+        <div style="padding:0 20px 20px">
+          <p style="font-size:13px;color:#9ca3af;margin:8px 0 16px">
+            Cloud tier blocks view creation via API — here's how to do it manually in ~30 seconds:
+          </p>
+          <ol style="font-size:13px;color:#d1d5db;line-height:2;padding-left:20px">
+            <li>Open your base →
+              <a href="https://app.nocodb.com/wq62ewzr/ptha3v85jd54lva" target="_blank"
+                 style="color:#60a5fa">app.nocodb.com → Employee Nirvana</a>
+            </li>
+            <li>In the <strong>Views</strong> panel on the left, click <strong>+ Add View → Grid</strong></li>
+            <li>Name it <code style="background:#1f2937;padding:1px 6px;border-radius:3px">SDR Candidates</code>
+                → click <strong>+ Add Filter</strong> → <code>Top Role Fit</code> <em>is</em> <code>SDR</code>
+            </li>
+            <li>Repeat for <code style="background:#1f2937;padding:1px 6px;border-radius:3px">AE Candidates</code>
+                (filter: <code>Top Role Fit is AE</code>)
+            </li>
+            <li>Repeat for <code style="background:#1f2937;padding:1px 6px;border-radius:3px">Researcher Candidates</code>
+                (filter: <code>Top Role Fit is Researcher</code>)
+            </li>
+            <li><em>Optional:</em> Add a <strong>Kanban view</strong> grouped by <code>Recommendation</code>
+                to visualise pipeline visually
+            </li>
+          </ol>
+          <p style="font-size:12px;color:#6b7280;margin-top:12px">
+            ✅ Once the Researcher JD is ready, share it here and every candidate will be scored against it immediately.
+          </p>
+        </div>
+      </div>
+
+      <!-- Alfred scoring process -->
+      <div class="card" style="margin-top:16px;background:#0f172a;border:1px solid #1e3a5f">
+        <div class="card-header">
+          <span class="card-title">🤖 How to Score New Resumes with Alfred (Claude)</span>
+        </div>
+        <div style="padding:0 20px 20px;font-size:13px;color:#d1d5db;line-height:1.9">
+          <ol style="padding-left:20px;margin:12px 0">
+            <li>Upload a PDF/DOCX above — it gets added to NocoDB with a preview</li>
+            <li>Copy the extracted text from the preview box</li>
+            <li>Open WhatsApp → message Alfred:<br>
+                <code style="background:#1f2937;padding:4px 10px;border-radius:4px;display:inline-block;margin:4px 0;color:#60a5fa">
+                  Score this candidate for SDR/AE/Researcher: [paste extracted text]
+                </code>
+            </li>
+            <li>Alfred will return scores + analysis</li>
+            <li>Update the NocoDB record manually, or tell Alfred:
+                <code style="background:#1f2937;padding:4px 10px;border-radius:4px;display:inline-block;margin:4px 0;color:#60a5fa">
+                  Update candidate Jane Smith: SDR Score 8.5, AE Score 6, Recommendation Strong Yes
+                </code>
+            </li>
+            <li>This page auto-refreshes scores from NocoDB ✅</li>
+          </ol>
+        </div>
+      </div>
+    </div><!-- /page-candidates -->
 
   </div><!-- /main -->
 </div><!-- /layout -->
@@ -1624,6 +1792,193 @@ function filterIcpTable(tier) {
       <td class="right mono">${c.won ? '✓' : '—'}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="7" style="text-align:center;color:#64748b;padding:24px">No companies match this filter</td></tr>';
+}
+
+// ── Candidate Audit ──────────────────────────────────────────────────────────
+let _allCandidates = [];
+let _candFilter    = 'all';
+
+function reloadCandidates() {
+  loaded.candidates = false;
+  _allCandidates = [];
+  document.getElementById('candidate-grid').innerHTML = '';
+  loadCandidates();
+}
+
+function loadCandidates() {
+  const grid = document.getElementById('candidate-grid');
+  const loading = document.getElementById('candidate-loading');
+  loading.style.display = 'flex';
+  grid.innerHTML = '';
+  fetch(apiUrl('candidates'))
+    .then(r => r.json())
+    .then(res => {
+      loading.style.display = 'none';
+      if (!res.ok) throw new Error(res.error || 'API error');
+      _allCandidates = res.data.candidates || [];
+      loaded.candidates = true;
+      renderCandidateGrid(_candFilter);
+    })
+    .catch(err => {
+      loading.style.display = 'none';
+      grid.innerHTML = `<div class="error-box" style="grid-column:1/-1">⚠️ ${err.message}</div>`;
+    });
+}
+
+function filterCandidates(role, btn) {
+  _candFilter = role;
+  document.querySelectorAll('.cand-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  renderCandidateGrid(role);
+}
+
+function renderCandidateGrid(filter) {
+  const grid = document.getElementById('candidate-grid');
+  const list = filter === 'all'
+    ? _allCandidates
+    : _allCandidates.filter(c =>
+        filter === 'Pending Claude Review'
+          ? (c.Status||'') === 'Pending Claude Review'
+          : (c['Top Role Fit']||'').toUpperCase() === filter.toUpperCase()
+      );
+
+  if (!list.length) {
+    grid.innerHTML = `<p style="color:#6b7280;font-size:13px;grid-column:1/-1">No candidates match this filter.</p>`;
+    return;
+  }
+
+  const recClass = r => {
+    const v = (r||'').toLowerCase();
+    if (v.includes('strong yes')) return 'rec-strong-yes';
+    if (v.includes('yes'))        return 'rec-yes';
+    if (v.includes('maybe'))      return 'rec-maybe';
+    return 'rec-no';
+  };
+
+  const scoreBadge = (lbl, val) => {
+    const n = parseFloat(val) || 0;
+    const col = n >= 8 ? '#4ade80' : n >= 6 ? '#fbbf24' : n >= 4 ? '#f97316' : '#6b7280';
+    const disp = val ? parseFloat(val).toFixed(1) : '—';
+    return `<span class="cand-score-lbl">${lbl}</span>
+            <span class="cand-score-val" style="color:${col}">${disp}</span>`;
+  };
+
+  const skills = (raw) => {
+    if (!raw) return '';
+    return (raw.split(/[,;]+/).slice(0,5))
+      .map(s => `<span class="cand-skill-tag">${s.trim()}</span>`).join('');
+  };
+
+  const roleKey = r => {
+    const v = (r||'').replace(/\s+/g,'').toLowerCase();
+    if (v.includes('sdr')) return 'SDR';
+    if (v.includes('ae') || v.includes('account')) return 'AE';
+    if (v.includes('research')) return 'Researcher';
+    return 'Pending';
+  };
+
+  grid.innerHTML = list.map(c => {
+    const role  = roleKey(c['Top Role Fit']);
+    const isPending = (c.Status||'') === 'Pending Claude Review';
+    const li = c['LinkedIn Profile'] ? `<a href="${c['LinkedIn Profile']}" target="_blank"
+      style="font-size:11px;color:#60a5fa;text-decoration:none;">LinkedIn ↗</a>` : '';
+    return `
+    <div class="cand-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+        <div>
+          <div class="cand-name">${c.Name || 'Unknown'}</div>
+          <div class="cand-meta">${[c.Location, c['Years Experience'] ? c['Years Experience']+'y exp' : ''].filter(Boolean).join(' · ')}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+          <span class="cand-role-badge cand-role-${role}">${c['Top Role Fit'] || 'Unknown'}</span>
+          ${li}
+        </div>
+      </div>
+
+      <div class="cand-score-row">
+        ${scoreBadge('SDR', c['SDR Score'])}
+        <span style="color:#374151;font-size:16px">·</span>
+        ${scoreBadge('AE', c['AE Score'])}
+        ${c['Researcher Score'] ? `<span style="color:#374151;font-size:16px">·</span>${scoreBadge('Res', c['Researcher Score'])}` : ''}
+        <span style="flex:1"></span>
+        ${isPending
+          ? `<span style="font-size:11px;color:#a8a29e;background:#292524;padding:2px 8px;border-radius:10px">⏳ Pending</span>`
+          : `<span class="cand-rec ${recClass(c.Recommendation)}">${c.Recommendation || '—'}</span>`
+        }
+      </div>
+
+      ${c.Strengths ? `<div class="cand-notes"><strong style="color:#4ade80">+</strong> ${c.Strengths}</div>` : ''}
+      ${c.Weaknesses ? `<div class="cand-notes"><strong style="color:#f87171">−</strong> ${c.Weaknesses}</div>` : ''}
+      ${c['Key Skills'] ? `<div class="cand-skills">${skills(c['Key Skills'])}</div>` : ''}
+      ${c['Audit Notes'] ? `<div class="cand-notes" style="color:#6b7280;font-style:italic">${c['Audit Notes'].slice(0,120)}${c['Audit Notes'].length>120?'…':''}</div>` : ''}
+
+      ${c.Email || c.Phone ? `
+      <div style="display:flex;gap:12px;margin-top:4px">
+        ${c.Email  ? `<span style="font-size:11px;color:#6b7280">${c.Email}</span>`  : ''}
+        ${c.Phone  ? `<span style="font-size:11px;color:#6b7280">${c.Phone}</span>`  : ''}
+      </div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// Register candidates page
+_renderMap['candidates'] = function(data) {
+  _allCandidates = data.candidates || [];
+  renderCandidateGrid(_candFilter);
+};
+
+// Override showPage to trigger loadCandidates
+const _origShowPageCands = showPage;
+// Patch loadPage to handle candidates (direct fetch without generic pattern)
+const _origLoadPage = loadPage;
+loadPage = function(name, force=false) {
+  if (name === 'candidates') {
+    if (!loaded[name] || force) loadCandidates();
+    return;
+  }
+  _origLoadPage(name, force);
+};
+
+// Resume upload
+async function uploadResume() {
+  const fileInput = document.getElementById('cand-file-input');
+  const nameInput = document.getElementById('cand-name-input');
+  const result    = document.getElementById('upload-result');
+  if (!fileInput.files.length) {
+    result.style.display = 'block';
+    result.innerHTML = `<p style="color:#f87171;font-size:13px">⚠️ Please select a file first.</p>`;
+    return;
+  }
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  fd.append('name', nameInput.value.trim());
+  result.style.display = 'block';
+  result.innerHTML = `<p style="font-size:13px;color:#9ca3af">⏳ Extracting text…</p>`;
+  try {
+    const r = await fetch(`/api/upload-resume?key=${API_KEY}`, { method: 'POST', body: fd });
+    const res = await r.json();
+    if (!res.ok) throw new Error(res.error);
+    const d = res.data;
+    result.innerHTML = `
+      <div style="background:#0d2b17;border:1px solid #166534;border-radius:8px;padding:16px;margin-top:8px">
+        <div style="font-size:13px;font-weight:700;color:#4ade80;margin-bottom:8px">
+          ✅ ${d.name} added to NocoDB (ID #${d.noco_id})
+        </div>
+        <div style="font-size:12px;color:#9ca3af;margin-bottom:8px">
+          Keyword signals → SDR: ${d.signals.sdr_signal} · AE: ${d.signals.ae_signal} · Researcher: ${d.signals.researcher_signal}
+          · Likely role: <strong style="color:#f9fafb">${d.signals.likely_role}</strong>
+        </div>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:10px">${d.message}</div>
+        <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:4px">Extracted text (copy to send Alfred on WhatsApp):</label>
+        <textarea readonly style="width:100%;height:120px;background:#111827;border:1px solid #374151;
+          color:#d1d5db;padding:8px;border-radius:6px;font-size:11px;resize:vertical;box-sizing:border-box"
+        >${d.preview}</textarea>
+      </div>`;
+    // Refresh candidate grid
+    reloadCandidates();
+  } catch(e) {
+    result.innerHTML = `<div class="error-box">⚠️ Upload failed: ${e.message}</div>`;
+  }
 }
 
 // ── Auto-load first page on init ─────────────────────────────────────────────

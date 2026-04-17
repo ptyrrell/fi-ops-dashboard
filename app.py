@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.4.0"
+APP_VERSION = "v2.5.0"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -39,10 +39,13 @@ DASHBOARD_SECRET  = os.getenv("DASHBOARD_SECRET", "")
 CACHE_TTL_SECS    = int(os.getenv("CACHE_TTL", "1800"))
 GOOGLE_SA_B64     = os.getenv("GOOGLE_SERVICE_ACCOUNT_B64", "")
 GOOGLE_SA_PATH    = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "")
-NOCO_BASE_URL     = os.getenv("NOCODB_BASE_URL", "https://app.nocodb.com")
-NOCO_TOKEN        = os.getenv("NOCODB_TOKEN", "")
-NOCO_PROJECT_ID   = os.getenv("NOCODB_PROJECT_ID", "pmnqbv38yudws3v")
-NOCO_DEALS_TABLE  = os.getenv("NOCODB_DEALS_TABLE_ID", "migi5lc0fb9zhie")
+NOCO_BASE_URL       = os.getenv("NOCODB_BASE_URL", "https://app.nocodb.com")
+NOCO_TOKEN          = os.getenv("NOCODB_TOKEN", "")
+NOCO_PROJECT_ID     = os.getenv("NOCODB_PROJECT_ID", "pmnqbv38yudws3v")
+NOCO_DEALS_TABLE    = os.getenv("NOCODB_DEALS_TABLE_ID", "migi5lc0fb9zhie")
+# Candidate audit — Employee Nirvana base
+NOCO_HR_BASE_ID     = os.getenv("NOCODB_HR_BASE_ID",    "ptha3v85jd54lva")
+NOCO_CANDIDATES_TBL = os.getenv("NOCODB_CANDIDATES_TBL","mhgfkpd0xwc51ca")
 
 # ── In-memory cache ───────────────────────────────────────────────────────────
 
@@ -1116,6 +1119,129 @@ def api_sales_summary():
     except Exception as e:
         log.error(f"sales-summary error: {e}", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
+
+# ── Candidate Audit ───────────────────────────────────────────────────────────
+
+_HR_HEADERS = lambda: {"xc-token": NOCO_TOKEN, "Content-Type": "application/json"}
+
+
+def _fetch_all_candidates():
+    rows, page = [], 1
+    while True:
+        r = requests.get(
+            f"{NOCO_BASE_URL}/api/v1/db/data/noco/{NOCO_HR_BASE_ID}/{NOCO_CANDIDATES_TBL}",
+            headers=_HR_HEADERS(),
+            params={"limit": 100, "offset": (page-1)*100},
+        )
+        r.raise_for_status()
+        d = r.json()
+        rows.extend(d.get("list", []))
+        if d.get("pageInfo", {}).get("isLastPage", True):
+            break
+        page += 1
+    return rows
+
+
+def _extract_text_from_file(file) -> str:
+    """Extract plain text from a PDF or DOCX file object."""
+    name = (file.filename or "").lower()
+    data = file.read()
+
+    if name.endswith(".pdf"):
+        import io
+        try:
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(data)) as pdf:
+                return "\n".join(p.extract_text() or "" for p in pdf.pages)
+        except Exception as e:
+            return f"[PDF extract error: {e}]"
+
+    if name.endswith(".docx"):
+        import io
+        try:
+            from docx import Document
+            doc = Document(io.BytesIO(data))
+            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        except Exception as e:
+            return f"[DOCX extract error: {e}]"
+
+    if name.endswith(".txt"):
+        return data.decode("utf-8", errors="replace")
+
+    return "[Unsupported file type — upload PDF, DOCX, or TXT]"
+
+
+def _quick_score_resume(text: str) -> dict:
+    """
+    Fast keyword-based pre-score. Returns rough SDR/AE/Researcher signals.
+    Claude scoring via Alfred gives accurate results — this is a triage preview.
+    """
+    t = text.lower()
+    sdr_kw  = ["cold call","outbound","prospecting","bdr","sdr","pipeline","lead generation",
+                "sales development","dial","connect","cadence"]
+    ae_kw   = ["account executive","closing","negotiat","quota","revenue","demo","discovery",
+                "proposal","contract","full cycle","hunter"]
+    res_kw  = ["research","list build","data enrich","linkedin","va ","virtual assistant",
+                "lead list","sourcing","data entry","prospecting list"]
+    sdr_s  = sum(2 if kw in t else 0 for kw in sdr_kw)
+    ae_s   = sum(2 if kw in t else 0 for kw in ae_kw)
+    res_s  = sum(2 if kw in t else 0 for kw in res_kw)
+    best   = max(sdr_s, ae_s, res_s)
+    role   = "SDR" if sdr_s == best else ("AE" if ae_s == best else "Researcher")
+    return {"sdr_signal": sdr_s, "ae_signal": ae_s, "researcher_signal": res_s,
+            "likely_role": role, "preview": text[:600].strip()}
+
+
+@app.route("/api/candidates")
+def api_candidates():
+    _require_key()
+    try:
+        candidates = _fetch_all_candidates()
+        return jsonify({"ok": True, "data": {"candidates": candidates,
+                        "total": len(candidates),
+                        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}})
+    except Exception as e:
+        log.error(f"candidates error: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/upload-resume", methods=["POST"])
+def api_upload_resume():
+    _require_key()
+    if "file" not in request.files:
+        return jsonify({"ok": False, "error": "No file uploaded"}), 400
+    f        = request.files["file"]
+    name_hint = request.form.get("name", "").strip() or f.filename.rsplit(".", 1)[0].replace("_"," ").title()
+    text     = _extract_text_from_file(f)
+    signals  = _quick_score_resume(text)
+
+    # Create NocoDB record (Status = Pending Claude Review)
+    payload = {
+        "Name":           name_hint,
+        "Status":         "Pending Claude Review",
+        "Top Role Fit":   signals["likely_role"],
+        "Audit Notes":    f"Auto-uploaded. Keyword signals → SDR:{signals['sdr_signal']} AE:{signals['ae_signal']} Researcher:{signals['researcher_signal']}. Awaiting Claude scoring.",
+        "Cover Letter Quality": "Pending",
+    }
+    try:
+        r = requests.post(
+            f"{NOCO_BASE_URL}/api/v1/db/data/noco/{NOCO_HR_BASE_ID}/{NOCO_CANDIDATES_TBL}",
+            headers=_HR_HEADERS(), json=payload,
+        )
+        r.raise_for_status()
+        noco_id = r.json().get("Id")
+    except Exception as e:
+        noco_id = None
+        log.warning(f"NocoDB insert failed: {e}")
+
+    return jsonify({"ok": True, "data": {
+        "name":       name_hint,
+        "noco_id":    noco_id,
+        "signals":    signals,
+        "preview":    signals["preview"],
+        "message":    f"Added '{name_hint}' to NocoDB (ID {noco_id}). Send resume text to Alfred on WhatsApp for Claude scoring.",
+    }})
+
 
 @app.route("/")
 def index():

@@ -230,7 +230,7 @@
     </div>
 
     <div class="sidebar-footer">
-      Built by Alfred · FI-OPS v2.1<br>
+      Built by Alfred · FI-OPS v2.3<br>
       Data: HubSpot + Sheets
     </div>
   </nav>
@@ -548,6 +548,15 @@ function _fmtMonthRange(key) {
   const [y, m] = key.split('-').map(Number);
   const last = new Date(y, m, 0).getDate();
   return `1 ${MONTH_SHORT[m-1]} – ${last} ${MONTH_SHORT[m-1]} ${y}`;
+}
+
+function _parseMonthLabel(label) {
+  // Parses "1 Apr – 30 Apr 2026" or "All Time" → [year, month] or [null, null]
+  const m = label?.match(/(\w+)\s+(\d{4})$/);
+  if (!m) return [null, null];
+  const MNAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const mo = MNAMES.indexOf(m[1]) + 1;
+  return mo > 0 ? [parseInt(m[2]), mo] : [null, null];
 }
 
 function _buildPickerHTML(prefix, currentKey, pickerYear, monthsWithData) {
@@ -931,16 +940,69 @@ function _renderResearcherTable(totals, recentRows, label) {
     }
   }
 
-  const recentTitle = label === 'All Time' ? 'Recent Activity (Last 7 Working Days)' : `Daily Breakdown · ${label}`;
-  html += `</tbody></table></div>
+  // ── Weekly ICP Quality Summary ────────────────────────────────────────────
+  const weeklyData = (_researcherData?.weekly || []);
+  const filteredWeekly = weeklyData.filter(w => {
+    if (!label || label === 'All Time') return true;
+    // label is like "April 2026" — match weeks that overlap the selected month
+    const [yr, mo] = _parseMonthLabel(label);
+    if (!yr) return true;
+    const wStart = new Date(w.week_start);
+    const wEnd   = new Date(w.week_end);
+    const mStart = new Date(yr, mo - 1, 1);
+    const mEnd   = new Date(yr, mo, 0);
+    return wStart <= mEnd && wEnd >= mStart;
+  });
 
+  if (filteredWeekly.length > 0) {
+    html += `
   <div class="card">
-    <div class="card-header"><div class="card-title">📅 ${recentTitle}</div></div>
+    <div class="card-header">
+      <div class="card-title">📊 Weekly ICP Quality <span style="font-size:11px;font-weight:500;color:var(--text-muted);margin-left:6px">${label}</span></div>
+      <div class="card-subtitle">HubSpot leads added per week · ICP scored via company profile</div>
+    </div>
+    <table class="fi-table">
+      <thead><tr>
+        <th>Week</th>
+        <th class="right">HS Leads</th>
+        <th class="right">ICP A</th>
+        <th class="right">ICP B</th>
+        <th class="right">ICP C</th>
+        <th class="right">ICP X</th>
+        <th class="right">ICP A+B%</th>
+      </tr></thead>
+      <tbody>`;
+    for (const w of filteredWeekly) {
+      const icp_pct = w.icp_pct || 0;
+      const pctCls  = icp_pct >= 40 ? 'green' : icp_pct >= 25 ? 'amber' : 'red';
+      html += `<tr>
+        <td class="mono muted" style="font-size:12px">${w.week_key} <span style="color:var(--text-dim);font-size:11px">${w.week_label}</span></td>
+        <td class="right mono">${w.count || '—'}</td>
+        <td class="right mono" style="color:var(--green)">${w.icp_a || '—'}</td>
+        <td class="right mono" style="color:var(--teal)">${w.icp_b || '—'}</td>
+        <td class="right mono muted">${w.icp_c || '—'}</td>
+        <td class="right mono" style="color:var(--red)">${w.icp_x || '—'}</td>
+        <td class="right pct-cell"><span class="pct-num ${pctCls}">${icp_pct}%</span></td>
+      </tr>`;
+    }
+    html += `</tbody></table></div>`;
+  }
+
+  // ── Daily Breakdown ───────────────────────────────────────────────────────
+  const recentTitle = label === 'All Time' ? 'Recent Activity (Last 7 Working Days)' : `Daily Breakdown · ${label}`;
+  html += `
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">📅 ${recentTitle}</div>
+      <div class="card-subtitle">Leads from Google Sheets · HubSpot Leads & ICP are day-level totals (all researchers)</div>
+    </div>
     <table class="fi-table">
       <thead><tr>
         <th>Date</th>
         <th>Researcher</th>
         <th class="right">Leads</th>
+        <th class="right" title="Unique companies added to HubSpot that calendar day">HS Leads</th>
+        <th class="right" title="ICP A+B% of that day's HubSpot leads">ICP A+B%</th>
       </tr></thead>
       <tbody>`;
 
@@ -949,13 +1011,25 @@ function _renderResearcherTable(totals, recentRows, label) {
     : (recentRows||[]).slice(0, 60);
 
   if (!displayRows.length) {
-    html += `<tr><td colspan="3" style="text-align:center;color:var(--text-muted);padding:24px">No activity recorded for this period</td></tr>`;
+    html += `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:24px">No activity recorded for this period</td></tr>`;
   } else {
+    // Group rows by date so we only show HS columns on first researcher per day
+    let lastDate = null;
     for (const r of displayRows) {
+      const isNewDate = r.iso_date !== lastDate;
+      lastDate = r.iso_date;
+      const hsLeads   = r.hs_leads   != null ? r.hs_leads   : '—';
+      const hsIcpPct  = r.hs_icp_pct != null ? r.hs_icp_pct : null;
+      const icpCls    = hsIcpPct != null ? pctClass(hsIcpPct, 40, 25) : '';
+      const icpStr    = hsIcpPct != null ? `<span class="pct-num ${icpCls}">${hsIcpPct}%</span>` : '—';
+      // HS columns are day-totals — show on all rows but mute non-first for clarity
+      const hsCellStyle = isNewDate ? '' : 'style="opacity:0.35"';
       html += `<tr>
         <td class="muted mono">${r.date}</td>
         <td class="bold">${r.rep}</td>
         <td class="right mono">${r.leads || '—'}</td>
+        <td class="right mono" ${hsCellStyle}>${isNewDate ? hsLeads : ''}</td>
+        <td class="right pct-cell" ${hsCellStyle}>${isNewDate ? icpStr : ''}</td>
       </tr>`;
     }
   }

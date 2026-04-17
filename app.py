@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v1.2.0"
+APP_VERSION = "v2.3.0"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -213,6 +213,82 @@ def _effective_icp_tier(deal: dict) -> str:
         deal.get("company_name", ""),
         deal.get("industry", ""),
     )
+
+
+@_cached("daily_hs_stats", ttl=1800)
+def _fetch_daily_hs_stats() -> dict:
+    """
+    Aggregate pipeline_deals by deal_created date.
+    Returns {
+      'by_date':  {iso_date: {count, icp_a, icp_b, icp_c, icp_x, icp_ab, icp_pct}},
+      'by_week':  {week_key: {week_label, week_start, week_end, count, icp_ab, icp_pct}},
+    }
+    One unique company per date (deduplicated by company_id/name within the same day).
+    Researcher attribution is not available in HubSpot — these are day-level totals.
+    """
+    from datetime import date as date_type
+
+    deals = _noco_get_all(
+        NOCO_DEALS_TABLE,
+        fields="company_id,company_name,industry,icp_tier,deal_created",
+    )
+
+    # Group by date — deduplicate companies added on same day
+    by_date: dict = {}
+    for d in deals:
+        dc = (d.get("deal_created") or "").strip()[:10]
+        if not dc:
+            continue
+        cid  = str(d.get("company_id") or "").strip()
+        name = (d.get("company_name") or "").strip().lower()
+        key  = cid if cid else name
+        if not key:
+            continue
+        if dc not in by_date:
+            by_date[dc] = {}
+        if key not in by_date[dc]:
+            by_date[dc][key] = d   # keep first occurrence per company per day
+
+    # Compute ICP counts per day
+    result_by_date: dict = {}
+    for dc, companies in by_date.items():
+        counts = {"count": 0, "icp_a": 0, "icp_b": 0, "icp_c": 0, "icp_x": 0}
+        for deal in companies.values():
+            tier = _effective_icp_tier(deal)
+            counts["count"] += 1
+            counts[f"icp_{tier.lower()}"] = counts.get(f"icp_{tier.lower()}", 0) + 1
+        ab  = counts["icp_a"] + counts["icp_b"]
+        pct = round(ab / counts["count"] * 100) if counts["count"] else 0
+        result_by_date[dc] = {**counts, "icp_ab": ab, "icp_pct": pct}
+
+    # Roll up to ISO weeks
+    by_week: dict = {}
+    for dc, stats in result_by_date.items():
+        try:
+            dt   = datetime.strptime(dc, "%Y-%m-%d").date()
+            iso  = dt.isocalendar()
+            wkey = f"{iso[0]}-W{iso[1]:02d}"
+            # Week Mon–Sun boundaries
+            mon = dt - timedelta(days=dt.weekday())
+            sun = mon + timedelta(days=6)
+            if wkey not in by_week:
+                by_week[wkey] = {
+                    "week_key":   wkey,
+                    "week_label": f"{mon.strftime('%-d %b')}–{sun.strftime('%-d %b')}",
+                    "week_start": mon.isoformat(),
+                    "week_end":   sun.isoformat(),
+                    "count": 0, "icp_a": 0, "icp_b": 0, "icp_c": 0, "icp_x": 0,
+                    "icp_ab": 0,
+                }
+            for k in ("count","icp_a","icp_b","icp_c","icp_x","icp_ab"):
+                by_week[wkey][k] += stats.get(k, 0)
+        except Exception:
+            continue
+
+    for w in by_week.values():
+        w["icp_pct"] = round(w["icp_ab"] / w["count"] * 100) if w["count"] else 0
+
+    return {"by_date": result_by_date, "by_week": by_week}
 
 
 # ── Google Sheets client ──────────────────────────────────────────────────────
@@ -466,6 +542,16 @@ def _fetch_researcher_activity():
     date_range_start = all_dates[0]  if all_dates else "—"
     date_range_end   = all_dates[-1] if all_dates else "—"
 
+    # Fetch HubSpot daily stats (ICP quality per day, day-level totals)
+    try:
+        hs_stats    = _fetch_daily_hs_stats()
+        hs_by_date  = hs_stats.get("by_date", {})
+        hs_by_week  = hs_stats.get("by_week",  {})
+    except Exception as e:
+        log.warning(f"Could not fetch daily HS stats: {e}")
+        hs_by_date = {}
+        hs_by_week = {}
+
     # All individual rows with ISO dates — used by frontend date-filter controls
     all_rows_export = []
     for row in rows[2:]:
@@ -474,29 +560,50 @@ def _fetch_researcher_activity():
         if rep not in RESEARCHERS: continue
         raw_date = v(row, 0)
         parsed   = _parse_sheet_date(raw_date)
+        iso      = parsed.isoformat() if parsed else None
+        hs_day   = hs_by_date.get(iso, {}) if iso else {}
         all_rows_export.append({
-            "date":     raw_date,
-            "iso_date": parsed.isoformat() if parsed else None,
-            "rep":      v(row, 1),
-            "leads":    n(row, 2),
-            "dials":    n(row, 4),
-            "emails":   n(row, 5),
-            "connects": n(row, 6),
-            "demos":    n(row, 8),
+            "date":       raw_date,
+            "iso_date":   iso,
+            "rep":        v(row, 1),
+            "leads":      n(row, 2),
+            "dials":      n(row, 4),
+            "emails":     n(row, 5),
+            "connects":   n(row, 6),
+            "demos":      n(row, 8),
+            # HubSpot pipeline quality for this calendar day (all researchers combined)
+            "hs_leads":   hs_day.get("count"),
+            "hs_icp_ab":  hs_day.get("icp_ab"),
+            "hs_icp_pct": hs_day.get("icp_pct"),
         })
+
+    # Build weekly rollup from hs_by_week — attach ISO week key to each sheet row
+    # so the frontend can group rows into weeks and show week-level quality
+    for row_export in all_rows_export:
+        if row_export.get("iso_date"):
+            try:
+                dt   = datetime.strptime(row_export["iso_date"], "%Y-%m-%d")
+                iso  = dt.isocalendar()
+                row_export["week_key"] = f"{iso[0]}-W{iso[1]:02d}"
+            except Exception:
+                pass
+
+    # Weekly summaries sorted oldest → newest
+    weekly_summaries = sorted(hs_by_week.values(), key=lambda w: w["week_start"])
 
     parsed_count = sum(1 for r in all_rows_export if r.get("iso_date"))
     log.info(f"Researcher activity: {len(all_rows_export)} rows, {parsed_count} with parsed dates, "
              f"sample date = {all_rows_export[0]['date'] if all_rows_export else 'none'}")
 
     return {
-        "totals":       totals,
-        "recent":       recent,
-        "all_rows":     all_rows_export,
-        "date_range":   f"{date_range_start} – {date_range_end}",
-        "parsed_dates": parsed_count,
-        "total_rows":   len(all_rows_export),
-        "updated_at":   datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "totals":          totals,
+        "recent":          recent,
+        "all_rows":        all_rows_export,
+        "weekly":          weekly_summaries,
+        "date_range":      f"{date_range_start} – {date_range_end}",
+        "parsed_dates":    parsed_count,
+        "total_rows":      len(all_rows_export),
+        "updated_at":      datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
 
 # ── Data: SDR Review (NocoDB for pipeline, Sheets for call activity) ──────────

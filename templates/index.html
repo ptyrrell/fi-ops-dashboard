@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>FieldInsight — Ops Dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -162,22 +163,90 @@
     .picker-range-label { font-size: 12px; font-weight: 700; color: var(--text-muted); white-space: nowrap; font-family: 'DM Mono', monospace; }
 
     /* ── RESPONSIVE ── */
+    /* ── Hamburger button (hidden on desktop) ─────────────────────────── */
+    .mobile-topbar {
+      display: none;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: var(--sidebar-bg);
+      border-bottom: 1px solid #1f2937;
+      position: sticky;
+      top: 0;
+      z-index: 200;
+    }
+    .hamburger {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      cursor: pointer;
+      padding: 4px;
+      background: none;
+      border: none;
+    }
+    .hamburger span {
+      display: block;
+      width: 22px;
+      height: 2px;
+      background: #94a3b8;
+      border-radius: 2px;
+      transition: all 0.25s;
+    }
+    .hamburger.open span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+    .hamburger.open span:nth-child(2) { opacity: 0; }
+    .hamburger.open span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+    .mobile-logo { font-size: 14px; font-weight: 800; color: #f9fafb; letter-spacing: -0.3px; }
+
+    /* ── Overlay backdrop ─────────────────────────────────────────────── */
+    .sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.55);
+      z-index: 299;
+    }
+    .sidebar-overlay.visible { display: block; }
+
     @media (max-width: 900px) {
       .sidebar { width: 200px; }
       .two-col, .three-col { grid-template-columns: 1fr; }
       .page-content { padding: 16px; }
     }
     @media (max-width: 640px) {
-      .sidebar { display: none; }
+      .mobile-topbar { display: flex; }
+      /* Sidebar slides in over the page */
+      .sidebar {
+        position: fixed;
+        top: 0; left: 0;
+        height: 100dvh;
+        z-index: 300;
+        transform: translateX(-100%);
+        transition: transform 0.28s cubic-bezier(.4,0,.2,1);
+        width: 260px !important;
+      }
+      .sidebar.open { transform: translateX(0); }
       .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+      .page-content { padding: 12px; }
+      .layout { flex-direction: column; }
     }
   </style>
 </head>
 <body>
+<!-- ── MOBILE TOPBAR ── -->
+<div class="mobile-topbar">
+  <button class="hamburger" id="hamburger-btn" onclick="toggleSidebar()" aria-label="Toggle menu">
+    <span></span><span></span><span></span>
+  </button>
+  <div class="mobile-logo">FI <span style="font-weight:500;opacity:.6;font-size:12px">Ops Dashboard</span></div>
+</div>
+
+<!-- ── SIDEBAR OVERLAY ── -->
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
 <div class="layout">
 
   <!-- ── SIDEBAR ── -->
-  <nav class="sidebar">
+  <nav class="sidebar" id="main-sidebar">
     <div class="sidebar-logo">
       <div class="logo-mark">FI</div>
       <div class="logo-name">FieldInsight<span style="font-size:10px;opacity:0.6;margin-left:8px;">{{ app_version }}</span></div>
@@ -406,6 +475,23 @@ function showPage(name) {
   document.getElementById('page-' + name).classList.add('active');
   event.currentTarget.classList.add('active');
   if (!loaded[name]) loadPage(name);
+  closeSidebar();   // auto-close on mobile after nav
+}
+
+function toggleSidebar() {
+  const sidebar  = document.getElementById('main-sidebar');
+  const overlay  = document.getElementById('sidebar-overlay');
+  const btn      = document.getElementById('hamburger-btn');
+  const isOpen   = sidebar.classList.contains('open');
+  sidebar.classList.toggle('open', !isOpen);
+  overlay.classList.toggle('visible', !isOpen);
+  btn.classList.toggle('open', !isOpen);
+}
+
+function closeSidebar() {
+  document.getElementById('main-sidebar')?.classList.remove('open');
+  document.getElementById('sidebar-overlay')?.classList.remove('visible');
+  document.getElementById('hamburger-btn')?.classList.remove('open');
 }
 
 function reload(name) {

@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.3.0"
+APP_VERSION = "v2.4.0"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -197,22 +197,57 @@ def _rule_icp_tier(company_name: str, industry: str = "") -> str:
     if ind in _ICP_INDUSTRY_B:
         return "B"
 
-    return "C"   # not enough info to qualify or disqualify
+    return "C"
 
 
 def _effective_icp_tier(deal: dict) -> str:
     """
-    Return the best available ICP tier for a deal:
-    1. Claude-scored tier from NocoDB (written by Alfred batch scorer)
-    2. Rule-based fallback using company_name + industry
+    Return the best available ICP tier for a deal.
+    Prefers Claude-scored tier (from NocoDB icp_tier), falls back to rule-based.
     """
-    tier = (deal.get("icp_tier") or "").strip()
-    if tier in ("A", "B", "C", "X"):
-        return tier
+    raw = (deal.get("icp_tier") or "").strip()
+    # Accept only clean tier values — reject rule-prefixed strings
+    if raw in ("A", "B", "C", "X"):
+        return raw
     return _rule_icp_tier(
         deal.get("company_name", ""),
         deal.get("industry", ""),
     )
+
+
+def _icp_score_note(deal: dict) -> str:
+    """
+    Return a human-readable explanation of how the ICP tier was determined.
+    Uses icp_score if it contains a reason (set by rule_score_pipeline.py or
+    Alfred's Claude scorer). Falls back to the rule engine with explanation.
+    """
+    raw_score = (deal.get("icp_score") or "").strip()
+    # Alfred Claude scorer writes numeric scores; rule scorer writes "rule:X | reason"
+    if raw_score.startswith("rule:") and "|" in raw_score:
+        return raw_score.split("|", 1)[1].strip()
+    if raw_score and not raw_score.startswith("rule:"):
+        # Looks like a real Claude score — indicate it
+        tier = (deal.get("icp_tier") or "").strip()
+        return f"Claude-scored (score: {raw_score})" if raw_score else f"Claude-scored tier {tier}"
+    # Generate a fresh rule explanation
+    name = (deal.get("company_name") or "").lower()
+    ind  = (deal.get("industry")      or "").lower().replace(" ", "_")
+    for kw in _ICP_DISQUALIFY:
+        if kw in name:
+            return f"Disqualified — keyword: '{kw}'"
+    for kw in _ICP_KEYWORDS_A:
+        if kw in name:
+            return f"Tier A — keyword: '{kw}' (HVAC / Electrical / Fire / Plumbing)"
+    if ind in _ICP_INDUSTRY_A:
+        return f"Tier A — industry: '{ind}'"
+    for kw in _ICP_KEYWORDS_B:
+        if kw in name:
+            return f"Tier B — keyword: '{kw}' (Maintenance / Facility / Cleaning)"
+    if ind in _ICP_INDUSTRY_B:
+        return f"Tier B — industry: '{ind}'"
+    if ind:
+        return f"Tier C — no trade signal (industry on file: '{ind}')"
+    return "Tier C — no trade keyword or industry signal found in company name"
 
 
 @_cached("daily_hs_stats", ttl=1800)
@@ -930,14 +965,14 @@ def _fetch_icp_audit():
             continue
         if cn not in companies:
             companies[cn] = {
-                "company":    cn,
-                "industry":   (d.get("industry") or "").strip(),
-                "claude_tier": (d.get("icp_tier") or "").strip(),   # from Alfred batch scorer
-                "icp_score":  (d.get("icp_score") or "").strip(),
-                "researcher": (d.get("researcher") or "Not set").strip() or "Not set",
-                "lead_count": 0,
-                "demos":      0,
-                "won":        False,
+                "company":     cn,
+                "industry":    (d.get("industry") or "").strip(),
+                "claude_tier": (d.get("icp_tier") or "").strip(),
+                "icp_score":   (d.get("icp_score") or "").strip(),
+                "researcher":  (d.get("researcher") or "Not set").strip() or "Not set",
+                "lead_count":  0,
+                "demos":       0,
+                "won":         False,
             }
         companies[cn]["lead_count"] += 1
         if d.get("is_demo_booked"):
@@ -961,8 +996,9 @@ def _fetch_icp_audit():
             tier = _rule_icp_tier(c["company"], c["industry"])
             source = "rule"
             rule_count += 1
-        c["tier"]   = tier
-        c["source"] = source
+        c["tier"]       = tier
+        c["source"]     = source
+        c["score_note"] = _icp_score_note(c)
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
         company_list.append(c)
 

@@ -2,8 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>FieldInsight — Ops Dashboard</title>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
@@ -162,8 +161,6 @@
     .picker-prevnext button:hover { border-color: var(--accent); color: var(--accent); }
     .picker-range-label { font-size: 12px; font-weight: 700; color: var(--text-muted); white-space: nowrap; font-family: 'DM Mono', monospace; }
 
-    .inline-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-
     /* ── RESPONSIVE ── */
     @media (max-width: 900px) {
       .sidebar { width: 200px; }
@@ -173,12 +170,6 @@
     @media (max-width: 640px) {
       .sidebar { display: none; }
       .kpi-grid { grid-template-columns: repeat(2, 1fr); }
-      .inline-two-col { grid-template-columns: 1fr; }
-      .picker-bar { padding: 10px 16px; gap: 8px; }
-    }
-    @media (max-width: 400px) {
-      .kpi-grid { grid-template-columns: 1fr; }
-      .page-content { padding: 12px; }
     }
   </style>
 </head>
@@ -231,7 +222,7 @@
     </div>
 
     <div class="sidebar-footer">
-      Built by Alfred · FI-OPS v2.3<br>
+      Built by Alfred · FI-OPS v2.4<br>
       Data: HubSpot + Sheets
     </div>
   </nav>
@@ -846,7 +837,7 @@ function _renderIcpDrilldown(container) {
   }
 
   container.innerHTML = `
-    <div class="inline-two-col">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
       <div>
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--green);margin-bottom:10px">
           ✅ ICP A+B Industries (${icpTotal} companies)
@@ -940,6 +931,64 @@ function _renderResearcherTable(totals, recentRows, label) {
       </tr>`;
     }
   }
+
+  // ── ICP Scoring Criteria Reference ───────────────────────────────────────
+  html += `
+  <div class="card" style="margin-bottom:18px">
+    <div class="card-header">
+      <div class="card-title">🎯 ICP Scoring Criteria</div>
+      <div class="card-subtitle">How each company in your pipeline gets classified</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;padding:4px 0">
+      <div style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2);border-radius:8px;padding:12px 14px">
+        <div style="font-weight:700;color:var(--green);font-size:13px;margin-bottom:6px">🟢 Tier A — Prioritise</div>
+        <div style="font-size:12px;color:#94a3b8;line-height:1.7">
+          HVAC · Air Conditioning · Refrigeration · Chiller · Cool Room<br>
+          Electrical Contractor · Electrician<br>
+          Plumbing · Gas Fitting<br>
+          Fire Protection · Fire Sprinkler · Fire Safety<br>
+          Mechanical Services · Building Services
+        </div>
+      </div>
+      <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:8px;padding:12px 14px">
+        <div style="font-weight:700;color:var(--amber);font-size:13px;margin-bottom:6px">🟡 Tier B — Nurture</div>
+        <div style="font-size:12px;color:#94a3b8;line-height:1.7">
+          Pest Control<br>
+          Facilities Management<br>
+          Property Maintenance<br>
+          Commercial Cleaning · Window Cleaning<br>
+          Security Install · CCTV · Alarm<br>
+          Solar Install · Renewable Energy<br>
+          Landscaping · Irrigation · Grounds Maintenance
+        </div>
+      </div>
+      <div style="background:rgba(148,163,184,.06);border:1px solid rgba(148,163,184,.15);border-radius:8px;padding:12px 14px">
+        <div style="font-weight:700;color:#94a3b8;font-size:13px;margin-bottom:6px">⚪ Tier C — Low Signal</div>
+        <div style="font-size:12px;color:#64748b;line-height:1.7">
+          No trade or field-service keywords found in company name.<br><br>
+          May still be a valid lead — check their website.<br>
+          Use the <strong style="color:#94a3b8">ICP Audit</strong> page to review and mark manually.
+        </div>
+      </div>
+      <div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:12px 14px">
+        <div style="font-weight:700;color:var(--red);font-size:13px;margin-bottom:6px">🔴 Tier X — Disqualified</div>
+        <div style="font-size:12px;color:#94a3b8;line-height:1.7">
+          Software · SaaS · App Dev · Web Dev<br>
+          Accounting · Finance · Insurance · Legal<br>
+          Real Estate · Recruitment · Retail<br>
+          Restaurant · Café · Hotel · Tourism<br>
+          School · Hospital · Medical · Dental<br>
+          Gym · Salon · Church · Charity
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:12px;padding:10px 14px;background:rgba(99,102,241,.07);border-radius:6px;font-size:12px;color:#94a3b8">
+      💡 <strong style="color:#c7d2fe">How scoring works:</strong> Companies are first checked by Claude (Alfred's AI scorer).
+      If not yet Claude-scored, the keyword matcher above is used as a fallback.
+      Claude scores appear as <span style="background:rgba(99,102,241,.2);color:#a5b4fc;padding:1px 5px;border-radius:3px;font-size:11px">Claude</span> in the ICP Audit page.
+      Check the <strong style="color:#c7d2fe">ICP Audit</strong> tab to see per-company reasons.
+    </div>
+  </div>`;
 
   // ── Weekly ICP Quality Summary ────────────────────────────────────────────
   const weeklyData = (_researcherData?.weekly || []);
@@ -1469,15 +1518,20 @@ function filterIcpTable(tier) {
   const tbody = document.getElementById('icp-company-tbody');
   if (!tbody) return;
   tbody.innerHTML = rows.slice(0, 300).map(c => {
-    const tc = TIER_COLORS[c.tier] || '#94a3b8';
+    const tc  = TIER_COLORS[c.tier] || '#94a3b8';
     const ind = (c.industry || '—').replace(/_/g,' ');
     const src = c.source === 'claude'
       ? `<span style="font-size:11px;background:rgba(99,102,241,.2);color:#a5b4fc;padding:1px 6px;border-radius:4px">Claude</span>`
       : `<span style="font-size:11px;background:rgba(148,163,184,.15);color:#94a3b8;padding:1px 6px;border-radius:4px">keyword</span>`;
+    const note    = c.score_note || '';
+    const tierTip = note ? ` title="${note}"` : '';
+    const noteEl  = note
+      ? `<div style="font-size:11px;color:#64748b;margin-top:2px;font-style:italic">${note}</div>`
+      : '';
     return `<tr>
-      <td class="bold">${c.company}</td>
+      <td><span class="bold">${c.company}</span>${noteEl}</td>
       <td style="color:#94a3b8;font-size:12px">${ind}</td>
-      <td class="right"><span style="font-weight:700;color:${tc}">${c.tier}</span></td>
+      <td class="right"><span style="font-weight:700;color:${tc}"${tierTip}>${c.tier}</span></td>
       <td class="right">${src}</td>
       <td class="right mono">${c.lead_count}</td>
       <td class="right mono">${c.demos || 0}</td>

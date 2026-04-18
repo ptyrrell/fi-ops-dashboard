@@ -388,7 +388,7 @@
     </div>
 
     <div class="sidebar-footer">
-      Built by Alfred · FI-OPS v2.7<br>
+      Built by Alfred · FI-OPS v2.8<br>
       Data: HubSpot + Sheets
     </div>
   </nav>
@@ -1359,7 +1359,7 @@ function _renderResearcherTable(totals, recentRows, label) {
   <div class="card">
     <div class="card-header">
       <div class="card-title">📅 ${recentTitle}</div>
-      <div class="card-subtitle">Leads from Google Sheets · HubSpot Leads & ICP are day-level totals (all researchers)</div>
+      <div class="card-subtitle">Leads from Google Sheets · HubSpot Leads &amp; ICP are day-level totals (all researchers) · Jay Dials from HubSpot (Mark Lang)</div>
     </div>
     <table class="fi-table">
       <thead><tr>
@@ -1368,6 +1368,9 @@ function _renderResearcherTable(totals, recentRows, label) {
         <th class="right">Leads</th>
         <th class="right" title="Unique companies added to HubSpot that calendar day">HS Leads</th>
         <th class="right" title="ICP A+B% of that day's HubSpot leads">ICP A+B%</th>
+        <th class="right" title="Mark Lang (Jay) outbound dials from HubSpot that day">Jay Dials</th>
+        <th class="right" title="Calls where Jay spoke to someone (connected)">Connected</th>
+        <th class="right" title="Demos/meetings booked by Jay that day">Booked</th>
       </tr></thead>
       <tbody>`;
 
@@ -1376,9 +1379,9 @@ function _renderResearcherTable(totals, recentRows, label) {
     : (recentRows||[]).slice(0, 60);
 
   if (!displayRows.length) {
-    html += `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:24px">No activity recorded for this period</td></tr>`;
+    html += `<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:24px">No activity recorded for this period</td></tr>`;
   } else {
-    // Group rows by date so we only show HS columns on first researcher per day
+    // Group rows by date so we only show HS + Jay columns on first researcher per day
     let lastDate = null;
     for (const r of displayRows) {
       const isNewDate = r.iso_date !== lastDate;
@@ -1389,7 +1392,20 @@ function _renderResearcherTable(totals, recentRows, label) {
       const icpStr    = hsIcpPct != null
         ? `<span class="pct-num ${icpCls}" style="cursor:pointer" title="Click row to see company breakdown">${hsIcpPct}%</span>`
         : '—';
-      // HS columns are day-totals — show on first researcher row; make that row clickable
+      // Jay (Mark Lang) call columns — shown once per date
+      const markDials  = r.mark_dials     != null ? r.mark_dials     : null;
+      const markConn   = r.mark_connected != null ? r.mark_connected : null;
+      const markBooked = r.mark_demos     != null ? r.mark_demos     : null;
+      const connRate   = (markDials && markConn) ? Math.round(markConn / markDials * 100) : null;
+      const connCls    = connRate != null ? pctClass(connRate, 15, 8) : '';
+      const markDialsStr  = markDials  != null ? markDials  : '—';
+      const markConnStr   = markConn   != null
+        ? `<span class="pct-num ${connCls}" title="${connRate}% connect rate">${markConn}</span>`
+        : '—';
+      const markBookedStr = markBooked != null
+        ? (markBooked > 0 ? `<span style="color:#4ade80;font-weight:700">${markBooked}</span>` : '0')
+        : '—';
+      // HS + Jay columns are day-totals — show on first researcher row; make that row clickable
       const hsCellStyle = isNewDate ? '' : 'style="opacity:0.35"';
       const drillAttr   = isNewDate && r.iso_date
         ? `class="res-drill-row" onclick="openDrillModal('${r.iso_date}', '${r.date}')" title="Click to see ICP breakdown for ${r.date}"`
@@ -1400,6 +1416,9 @@ function _renderResearcherTable(totals, recentRows, label) {
         <td class="right mono">${r.leads || '—'}</td>
         <td class="right mono" ${hsCellStyle}>${isNewDate ? hsLeads : ''}</td>
         <td class="right pct-cell" ${hsCellStyle}>${isNewDate ? icpStr : ''}</td>
+        <td class="right mono" ${hsCellStyle}>${isNewDate ? markDialsStr : ''}</td>
+        <td class="right pct-cell" ${hsCellStyle}>${isNewDate ? markConnStr : ''}</td>
+        <td class="right mono" ${hsCellStyle}>${isNewDate ? markBookedStr : ''}</td>
       </tr>`;
     }
   }

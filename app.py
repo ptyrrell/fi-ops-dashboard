@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.7.0"
+APP_VERSION = "v2.8.0"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -329,6 +329,83 @@ def _fetch_daily_hs_stats() -> dict:
     return {"by_date": result_by_date, "by_week": by_week}
 
 
+# ── Data: Mark Lang (Jay) HubSpot call stats by date ─────────────────────────
+MARK_LANG_OWNER_ID = "104392067"
+BOOKED_KEYWORDS = ["booked","booking","demo","scheduled","meeting","next week","next tuesday",
+                   "next wednesday","next thursday","next friday","april","may"]
+CONNECTED_KEYWORDS = ["spoke to","spoke with","booked","interested","call back",
+                      "sent","email","talked","confirmed","agreed","he said","she said",
+                      "not interested","wrong number","busy","annual leave"]
+NO_ANSWER_KEYWORDS = ["no answer","no ans","n/a","didn't answer","not answering","voicemail","vm"]
+
+@_cached("mark_calls_by_date", ttl=1800)
+def _fetch_mark_calls_by_date() -> dict:
+    """
+    Fetches all outbound calls from Mark Lang (owner 104392067) from HubSpot.
+    Returns { iso_date: { dials, connected, no_answer, demos_booked } }
+    """
+    import re as _re
+    hs_key = os.environ.get("HUBSPOT_API_KEY", "")
+    if not hs_key:
+        return {}
+
+    headers_hs = {"Authorization": f"Bearer {hs_key}"}
+    since_ms = str(int((datetime.now(timezone.utc) - timedelta(days=90)).timestamp() * 1000))
+
+    by_date: dict = {}
+    after = None
+
+    while True:
+        payload = {
+            "properties": ["hs_call_body", "hs_timestamp", "hs_call_direction", "hs_call_source"],
+            "filterGroups": [{"filters": [
+                {"propertyName": "hubspot_owner_id", "operator": "EQ", "value": MARK_LANG_OWNER_ID},
+                {"propertyName": "hs_call_direction", "operator": "EQ", "value": "OUTBOUND"},
+                {"propertyName": "hs_timestamp", "operator": "GT", "value": since_ms},
+            ]}],
+            "sorts": [{"propertyName": "hs_timestamp", "direction": "DESCENDING"}],
+            "limit": 100,
+        }
+        if after:
+            payload["after"] = after
+
+        try:
+            r = requests.post(
+                "https://api.hubapi.com/crm/v3/objects/calls/search",
+                headers={**headers_hs, "Content-Type": "application/json"},
+                json=payload,
+                timeout=15,
+            )
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            log.warning(f"Mark calls fetch error: {e}")
+            break
+
+        for res in data.get("results", []):
+            p = res["properties"]
+            ts = (p.get("hs_timestamp") or "")[:10]
+            if not ts:
+                continue
+            body = _re.sub(r"<[^>]+>", "", (p.get("hs_call_body") or "")).strip().lower()
+            if ts not in by_date:
+                by_date[ts] = {"dials": 0, "connected": 0, "no_answer": 0, "demos_booked": 0}
+            d = by_date[ts]
+            d["dials"] += 1
+            if any(k in body for k in NO_ANSWER_KEYWORDS):
+                d["no_answer"] += 1
+            elif any(k in body for k in CONNECTED_KEYWORDS):
+                d["connected"] += 1
+            if any(k in body for k in BOOKED_KEYWORDS):
+                d["demos_booked"] += 1
+
+        after = data.get("paging", {}).get("next", {}).get("after")
+        if not after:
+            break
+
+    return by_date
+
+
 # ── Google Sheets client ──────────────────────────────────────────────────────
 
 def _get_sheets_client():
@@ -590,6 +667,13 @@ def _fetch_researcher_activity():
         hs_by_date = {}
         hs_by_week = {}
 
+    # Fetch Mark Lang (Jay) HubSpot call stats by date
+    try:
+        mark_calls = _fetch_mark_calls_by_date()
+    except Exception as e:
+        log.warning(f"Could not fetch Mark call stats: {e}")
+        mark_calls = {}
+
     # All individual rows with ISO dates — used by frontend date-filter controls
     all_rows_export = []
     for row in rows[2:]:
@@ -600,6 +684,7 @@ def _fetch_researcher_activity():
         parsed   = _parse_sheet_date(raw_date)
         iso      = parsed.isoformat() if parsed else None
         hs_day   = hs_by_date.get(iso, {}) if iso else {}
+        mark_day = mark_calls.get(iso, {})   if iso else {}
         all_rows_export.append({
             "date":       raw_date,
             "iso_date":   iso,
@@ -613,6 +698,10 @@ def _fetch_researcher_activity():
             "hs_leads":   hs_day.get("count"),
             "hs_icp_ab":  hs_day.get("icp_ab"),
             "hs_icp_pct": hs_day.get("icp_pct"),
+            # Mark Lang (Jay) HubSpot call stats for this day
+            "mark_dials":     mark_day.get("dials"),
+            "mark_connected": mark_day.get("connected"),
+            "mark_demos":     mark_day.get("demos_booked"),
         })
 
     # Build weekly rollup from hs_by_week — attach ISO week key to each sheet row

@@ -1080,7 +1080,8 @@ def _fetch_sdr_activity():
         merged_rows.append({
             "iso_date":       kr["iso_date"],
             "sdr":            sdr_name,
-            "dials_hs":       0, "connects_hs": 0, "connect_pct": 0,
+            "dials_hs":       0, "connects_hs": 0, "hs_connects": 0,
+            "connect_pct":    0, "hs_connect_pct": 0,
             "said_intro": 0, "had_convo": 0, "asked_meeting": 0, "booked_meeting": 0,
             "icp_a": 0, "icp_b": 0, "icp_c": 0, "icp_x": 0, "icp_ab": 0,
             "icp_ab_pct": 0, "unique_companies": 0,
@@ -1303,9 +1304,7 @@ def api_researchers():
 @app.route("/api/sdr")
 def api_sdr():
     _require_key()
-    if request.args.get("force") == "1":
-        _bust_cache("sdr_activity")
-        _bust_cache("sdr_daily_agg")
+    if request.args.get("force") == "1": _bust_cache("sdr_activity")
     try:
         return jsonify({"ok": True, "data": _fetch_sdr_activity()})
     except Exception as e:

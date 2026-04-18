@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.5.0"
+APP_VERSION = "v2.6.0"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -1190,6 +1190,78 @@ def _quick_score_resume(text: str) -> dict:
     role   = "SDR" if sdr_s == best else ("AE" if ae_s == best else "Researcher")
     return {"sdr_signal": sdr_s, "ae_signal": ae_s, "researcher_signal": res_s,
             "likely_role": role, "preview": text[:600].strip()}
+
+
+@app.route("/api/researcher-drill")
+def api_researcher_drill():
+    """
+    Returns the list of companies added on a specific date (or ISO week),
+    with ICP tier and score note, for the researcher row drill-down modal.
+    Query params: date=YYYY-MM-DD  OR  week=YYYY-Www
+    """
+    _require_key()
+    iso_date = request.args.get("date", "").strip()
+    week_key = request.args.get("week", "").strip()
+
+    try:
+        deals = _noco_get_all(
+            NOCO_DEALS_TABLE,
+            fields="company_id,company_name,industry,icp_tier,icp_score,deal_created",
+        )
+
+        # Filter to date or week
+        def _matches(d: dict) -> bool:
+            dc = (d.get("deal_created") or "").strip()[:10]
+            if iso_date:
+                return dc == iso_date
+            if week_key:
+                try:
+                    dt = datetime.strptime(dc, "%Y-%m-%d").date()
+                    y, w, _ = dt.isocalendar()
+                    return f"{y}-W{w:02d}" == week_key
+                except Exception:
+                    return False
+            return False
+
+        matched = [d for d in deals if _matches(d)]
+
+        # Deduplicate by company_id / name
+        seen: set = set()
+        unique: list = []
+        for d in matched:
+            cid  = str(d.get("company_id") or "").strip()
+            name = (d.get("company_name") or "").strip().lower()
+            key  = cid if cid else name
+            if key and key not in seen:
+                seen.add(key)
+                unique.append(d)
+
+        # Build response rows
+        rows = []
+        for d in sorted(unique, key=lambda x: (x.get("company_name") or "").lower()):
+            tier  = _effective_icp_tier(d)
+            note  = _icp_score_note(d)
+            rows.append({
+                "company":  d.get("company_name") or "—",
+                "industry": d.get("industry")     or "—",
+                "tier":     tier,
+                "note":     note,
+                "date":     (d.get("deal_created") or "")[:10],
+            })
+
+        ab  = sum(1 for r in rows if r["tier"] in ("A", "B"))
+        pct = round(ab / len(rows) * 100) if rows else 0
+
+        return jsonify({"ok": True, "data": {
+            "date":    iso_date or week_key,
+            "total":   len(rows),
+            "icp_ab":  ab,
+            "icp_pct": pct,
+            "rows":    rows,
+        }})
+    except Exception as e:
+        log.error(f"researcher-drill error: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/candidates")

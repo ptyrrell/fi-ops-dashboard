@@ -230,6 +230,46 @@
       .layout { flex-direction: column; }
     }
 
+    /* ── Drill-down modal ────────────────────────────────────────────────── */
+    .drill-backdrop { position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:900;
+                      display:none;align-items:center;justify-content:center;padding:16px; }
+    .drill-backdrop.open { display:flex; }
+    .drill-modal { background:#111827;border:1px solid #1f2937;border-radius:14px;
+                   width:100%;max-width:780px;max-height:88vh;display:flex;flex-direction:column;
+                   box-shadow:0 24px 60px rgba(0,0,0,.6); }
+    .drill-header { display:flex;align-items:flex-start;justify-content:space-between;
+                    padding:20px 24px 16px;border-bottom:1px solid #1f2937; }
+    .drill-title { font-size:15px;font-weight:700;color:#f9fafb; }
+    .drill-meta  { font-size:12px;color:#9ca3af;margin-top:3px; }
+    .drill-close { background:none;border:none;color:#6b7280;font-size:20px;cursor:pointer;
+                   line-height:1;padding:2px 6px;border-radius:4px; }
+    .drill-close:hover { color:#f9fafb;background:#374151; }
+    .drill-pills { display:flex;gap:8px;padding:12px 24px;border-bottom:1px solid #1f2937;flex-wrap:wrap; }
+    .drill-pill  { font-size:12px;font-weight:700;padding:4px 12px;border-radius:12px;cursor:pointer;
+                   border:1px solid transparent;transition:opacity 0.15s; }
+    .drill-pill:not(.active) { opacity:.5; }
+    .drill-pill.dp-a  { background:#1a2e1a;color:#4ade80;border-color:#166534; }
+    .drill-pill.dp-b  { background:#1e3a5f;color:#60a5fa;border-color:#1e3a8a; }
+    .drill-pill.dp-c  { background:#292524;color:#a8a29e;border-color:#44403c; }
+    .drill-pill.dp-x  { background:#2d1a1a;color:#f87171;border-color:#7f1d1d; }
+    .drill-pill.dp-all{ background:#1f2937;color:#d1d5db;border-color:#374151; }
+    .drill-body  { overflow-y:auto;flex:1; }
+    .drill-table { width:100%;border-collapse:collapse; }
+    .drill-table th { position:sticky;top:0;background:#111827;padding:10px 16px;
+                      font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+                      letter-spacing:.6px;text-align:left;border-bottom:1px solid #1f2937; }
+    .drill-table td { padding:9px 16px;font-size:13px;border-bottom:1px solid #1a2234;
+                      color:#d1d5db;vertical-align:top; }
+    .drill-table tr:last-child td { border-bottom:none; }
+    .drill-table tr:hover td { background:#1f2937; }
+    .drill-note  { font-size:11px;color:#6b7280;margin-top:2px; }
+    .drill-spinner { padding:32px;text-align:center;color:#6b7280;font-size:13px; }
+    /* clickable researcher rows */
+    .res-drill-row { cursor:pointer; }
+    .res-drill-row:hover td { background:#1e2d3d !important; }
+    .res-drill-row td:first-child::after { content:' ↗';font-size:10px;color:#60a5fa;opacity:0; }
+    .res-drill-row:hover td:first-child::after { opacity:1; }
+
     /* ── Candidate Audit ──────────────────────────────────────────────────── */
     .cand-tab { padding: 7px 16px; border-radius: 20px; font-size: 12px; font-weight: 600;
                 background: #1f2937; color: #9ca3af; border: 1px solid #374151; cursor: pointer;
@@ -261,6 +301,23 @@
   </style>
 </head>
 <body>
+<!-- ── DRILL-DOWN MODAL ── -->
+<div class="drill-backdrop" id="drill-backdrop" onclick="closeDrillModal(event)">
+  <div class="drill-modal" onclick="event.stopPropagation()">
+    <div class="drill-header">
+      <div>
+        <div class="drill-title" id="drill-title">ICP Breakdown</div>
+        <div class="drill-meta" id="drill-meta"></div>
+      </div>
+      <button class="drill-close" onclick="closeDrillModal()">✕</button>
+    </div>
+    <div class="drill-pills" id="drill-pills"></div>
+    <div class="drill-body">
+      <div id="drill-content" class="drill-spinner">Loading…</div>
+    </div>
+  </div>
+</div>
+
 <!-- ── MOBILE TOPBAR ── -->
 <div class="mobile-topbar">
   <button class="hamburger" id="hamburger-btn" onclick="toggleSidebar()" aria-label="Toggle menu">
@@ -327,7 +384,7 @@
     </div>
 
     <div class="sidebar-footer">
-      Built by Alfred · FI-OPS v2.5<br>
+      Built by Alfred · FI-OPS v2.6<br>
       Data: HubSpot + Sheets
     </div>
   </nav>
@@ -1325,10 +1382,15 @@ function _renderResearcherTable(totals, recentRows, label) {
       const hsLeads   = r.hs_leads   != null ? r.hs_leads   : '—';
       const hsIcpPct  = r.hs_icp_pct != null ? r.hs_icp_pct : null;
       const icpCls    = hsIcpPct != null ? pctClass(hsIcpPct, 40, 25) : '';
-      const icpStr    = hsIcpPct != null ? `<span class="pct-num ${icpCls}">${hsIcpPct}%</span>` : '—';
-      // HS columns are day-totals — show on all rows but mute non-first for clarity
+      const icpStr    = hsIcpPct != null
+        ? `<span class="pct-num ${icpCls}" style="cursor:pointer" title="Click row to see company breakdown">${hsIcpPct}%</span>`
+        : '—';
+      // HS columns are day-totals — show on first researcher row; make that row clickable
       const hsCellStyle = isNewDate ? '' : 'style="opacity:0.35"';
-      html += `<tr>
+      const drillAttr   = isNewDate && r.iso_date
+        ? `class="res-drill-row" onclick="openDrillModal('${r.iso_date}', '${r.date}')" title="Click to see ICP breakdown for ${r.date}"`
+        : '';
+      html += `<tr ${drillAttr}>
         <td class="muted mono">${r.date}</td>
         <td class="bold">${r.rep}</td>
         <td class="right mono">${r.leads || '—'}</td>
@@ -1980,6 +2042,105 @@ async function uploadResume() {
     result.innerHTML = `<div class="error-box">⚠️ Upload failed: ${e.message}</div>`;
   }
 }
+
+// ── Researcher Drill-down Modal ──────────────────────────────────────────────
+const TIER_COLOR = { A: '#4ade80', B: '#60a5fa', C: '#a8a29e', X: '#f87171' };
+const TIER_BG    = { A: '#1a2e1a', B: '#1e3a5f', C: '#292524', X: '#2d1a1a' };
+let _drillFilter = 'all';
+let _drillRows   = [];
+
+function openDrillModal(isoDate, displayDate) {
+  _drillFilter = 'all';
+  _drillRows   = [];
+  const backdrop = document.getElementById('drill-backdrop');
+  backdrop.classList.add('open');
+  document.getElementById('drill-title').textContent = `ICP Breakdown — ${displayDate}`;
+  document.getElementById('drill-meta').textContent  = 'Fetching companies from NocoDB…';
+  document.getElementById('drill-pills').innerHTML   = '';
+  document.getElementById('drill-content').innerHTML = '<div class="drill-spinner">⏳ Loading companies…</div>';
+  document.body.style.overflow = 'hidden';
+
+  fetch(`/api/researcher-drill?date=${isoDate}&key=${API_KEY}`)
+    .then(r => r.json())
+    .then(res => {
+      if (!res.ok) throw new Error(res.error);
+      const d = res.data;
+      _drillRows = d.rows || [];
+      const pctCls = d.icp_pct >= 40 ? 'good' : d.icp_pct >= 25 ? 'warn' : 'bad';
+      document.getElementById('drill-meta').innerHTML =
+        `${d.total} companies in HubSpot · ` +
+        `<strong style="color:var(--${pctCls})">${d.icp_pct}% ICP A+B</strong> ` +
+        `(${d.icp_ab} of ${d.total})`;
+
+      // Build filter pills
+      const counts = { all: d.total };
+      for (const r of _drillRows) counts[r.tier] = (counts[r.tier]||0) + 1;
+      const pillsHTML = [
+        `<button class="drill-pill dp-all active" onclick="drillFilter('all',this)">All (${d.total})</button>`,
+        counts.A ? `<button class="drill-pill dp-a" onclick="drillFilter('A',this)">Tier A — ${counts.A}</button>` : '',
+        counts.B ? `<button class="drill-pill dp-b" onclick="drillFilter('B',this)">Tier B — ${counts.B}</button>` : '',
+        counts.C ? `<button class="drill-pill dp-c" onclick="drillFilter('C',this)">Tier C — ${counts.C}</button>` : '',
+        counts.X ? `<button class="drill-pill dp-x" onclick="drillFilter('X',this)">Tier X — ${counts.X}</button>` : '',
+      ].join('');
+      document.getElementById('drill-pills').innerHTML = pillsHTML;
+      renderDrillTable('all');
+    })
+    .catch(err => {
+      document.getElementById('drill-content').innerHTML =
+        `<div style="padding:24px;color:#f87171">⚠️ ${err.message}</div>`;
+    });
+}
+
+function drillFilter(tier, btn) {
+  _drillFilter = tier;
+  document.querySelectorAll('.drill-pill').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  renderDrillTable(tier);
+}
+
+function renderDrillTable(tier) {
+  const rows = tier === 'all' ? _drillRows : _drillRows.filter(r => r.tier === tier);
+  if (!rows.length) {
+    document.getElementById('drill-content').innerHTML =
+      `<p style="padding:24px;color:#6b7280;font-size:13px">No companies for this filter.</p>`;
+    return;
+  }
+  let html = `<table class="drill-table">
+    <thead><tr>
+      <th>#</th>
+      <th>Company</th>
+      <th>Industry</th>
+      <th style="text-align:center">ICP Tier</th>
+      <th>Score Note</th>
+    </tr></thead><tbody>`;
+  rows.forEach((r, i) => {
+    const tc  = TIER_COLOR[r.tier] || '#9ca3af';
+    const tbg = TIER_BG[r.tier]   || '#1f2937';
+    html += `<tr>
+      <td style="color:#4b5563;font-size:11px">${i+1}</td>
+      <td style="font-weight:600">${r.company}</td>
+      <td style="color:#9ca3af">${r.industry}</td>
+      <td style="text-align:center">
+        <span style="display:inline-block;font-size:12px;font-weight:700;
+                     color:${tc};background:${tbg};padding:2px 10px;border-radius:10px">
+          ${r.tier}
+        </span>
+      </td>
+      <td><div class="drill-note">${r.note || '—'}</div></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('drill-content').innerHTML = html;
+}
+
+function closeDrillModal(e) {
+  if (e && e.target !== document.getElementById('drill-backdrop')) return;
+  document.getElementById('drill-backdrop').classList.remove('open');
+  document.body.style.overflow = '';
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeDrillModal();
+});
 
 // ── Auto-load first page on init ─────────────────────────────────────────────
 loadPage('pipeline');

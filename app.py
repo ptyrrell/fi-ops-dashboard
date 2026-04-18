@@ -804,12 +804,16 @@ def _fetch_researcher_activity():
 def _fetch_sdr_daily_agg() -> list:
     """Fetch the pre-aggregated daily summary (~128 rows) — fast & cheap.
     Populated by `alfred/tools/sync_sdr_calls.py rebuild_daily_agg()`."""
-    return _noco_get_all(
+    rows = _noco_get_all(
         NOCO_SDR_DAILY_AGG,
-        fields=("iso_date,sdr,week_key,dials,connects,said_intro,had_convo,"
-                "asked_meeting,booked_meeting,unique_companies,"
-                "icp_a,icp_b,icp_c,icp_x,updated_at,drill_json"),
+        fields=("iso_date,sdr,week_key,dials,connects,hs_connects,"
+                "said_intro,had_convo,asked_meeting,booked_meeting,"
+                "unique_companies,icp_a,icp_b,icp_c,icp_x,"
+                "updated_at,drill_json"),
     )
+    total_hs = sum((r.get("hs_connects") or 0) for r in rows)
+    log.info(f"sdr_daily_agg: {len(rows)} rows, total hs_connects={total_hs}")
+    return rows
 
 
 @_cached("sdr_calls_by_sdr", ttl=1800)
@@ -1080,8 +1084,7 @@ def _fetch_sdr_activity():
         merged_rows.append({
             "iso_date":       kr["iso_date"],
             "sdr":            sdr_name,
-            "dials_hs":       0, "connects_hs": 0, "hs_connects": 0,
-            "connect_pct":    0, "hs_connect_pct": 0,
+            "dials_hs":       0, "connects_hs": 0, "connect_pct": 0,
             "said_intro": 0, "had_convo": 0, "asked_meeting": 0, "booked_meeting": 0,
             "icp_a": 0, "icp_b": 0, "icp_c": 0, "icp_x": 0, "icp_ab": 0,
             "icp_ab_pct": 0, "unique_companies": 0,

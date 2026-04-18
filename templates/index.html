@@ -388,7 +388,7 @@
     </div>
 
     <div class="sidebar-footer">
-      Built by Alfred · FI-OPS v2.8<br>
+      Built by Alfred · FI-OPS v2.9<br>
       Data: HubSpot + Sheets
     </div>
   </nav>
@@ -969,23 +969,43 @@ function _applySDRFilter() {
   const start = _sdrMonth + '-01';
   const [y, m] = _sdrMonth.split('-').map(Number);
   const end   = `${_sdrMonth}-${new Date(y, m, 0).getDate()}`;
-  const filtered = filterRows(_sdrData.all_kyle_rows, start, end);
-  const byRep = {};
-  for (const r of filtered) {
-    const key = r.rep;
-    if (!byRep[key]) byRep[key] = {name:key, dials:0, connects:0, demos:0, days:0};
-    byRep[key].dials    += r.dials    || 0;
-    byRep[key].connects += r.connects || 0;
-    byRep[key].demos    += r.demos    || 0;
-    byRep[key].days     += 1;
+
+  // Kyle sheet rows for accountability section
+  const filteredKyle = filterRows(_sdrData.all_kyle_rows, start, end);
+
+  // Merged daily rows (HubSpot + sheet) for the main table
+  const allMerged   = _sdrData.daily_merged || [];
+  const filteredMerged = allMerged.filter(r => r.iso_date && r.iso_date >= start && r.iso_date <= end);
+
+  // Recompute SDR-level KPIs for the selected month
+  const kpis = {};
+  for (const r of filteredMerged) {
+    const s = r.sdr;
+    if (!kpis[s]) kpis[s] = {
+      dials_hs:0, connects_hs:0, said_intro:0, had_convo:0,
+      asked_meeting:0, booked_meeting:0, icp_ab:0, unique_companies:0,
+      dials_sheet:0, days:0
+    };
+    const k = kpis[s];
+    k.dials_hs         += r.dials_hs         || 0;
+    k.connects_hs      += r.connects_hs      || 0;
+    k.said_intro       += r.said_intro       || 0;
+    k.had_convo        += r.had_convo        || 0;
+    k.asked_meeting    += r.asked_meeting    || 0;
+    k.booked_meeting   += r.booked_meeting   || 0;
+    k.icp_ab           += r.icp_ab           || 0;
+    k.unique_companies += r.unique_companies || 0;
+    k.dials_sheet      += r.dials_sheet      || 0;
+    k.days             += 1;
   }
-  const callTotals = Object.values(byRep).map(r => ({
-    ...r,
-    connect_rate: r.dials    ? Math.round(r.connects / r.dials    * 100) : 0,
-    demo_rate:    r.connects ? Math.round(r.demos    / r.connects * 100) : 0,
-  }));
-  const recentRows = [...filtered].sort((a,b) => (b.iso_date||'').localeCompare(a.iso_date||''));
-  _renderSDRCallTable(callTotals, recentRows, _fmtMonthRange(_sdrMonth));
+  for (const s in kpis) {
+    const k = kpis[s];
+    k.connect_pct        = k.dials_hs         ? Math.round(k.connects_hs / k.dials_hs * 100) : 0;
+    k.icp_ab_pct         = k.unique_companies ? Math.round(k.icp_ab / k.unique_companies * 100) : 0;
+    k.accountability_pct = k.dials_sheet      ? Math.round(k.dials_hs / k.dials_sheet * 100) : null;
+  }
+
+  _renderSDRCallTable(kpis, filteredMerged, _fmtMonthRange(_sdrMonth));
 }
 
 // ── RENDER: Pipeline Quality ─────────────────────────────────────────────────
@@ -1446,13 +1466,42 @@ function _renderSDRPipeline(hs) {
   // We'll insert pipeline html before the call table — done in full render below
 }
 
-function _renderSDRCallTable(callActivity, recentRows, label) {
+function _renderSDRCallTable(kpis, mergedRows, label) {
   const hs = _sdrData?.hs_pipeline || {};
-  let html = `<div class="two-col">`;
+  let html = '';
 
+  // ── HEADLINE KPIs per SDR (new — HubSpot sourced) ─────────────────────────
+  const sdrOrder = ["Tim", "Jay"];
+  html += `<div class="two-col" style="margin-bottom:18px">`;
+  for (const sdrName of sdrOrder) {
+    const k = kpis[sdrName];
+    if (!k) {
+      html += `<div class="card" style="opacity:.55"><div class="card-header"><div class="card-title">📞 ${sdrName}</div></div><div class="kpi-sub" style="padding:24px;text-align:center">No call data for this period</div></div>`;
+      continue;
+    }
+    const connectCls = pctClass(k.connect_pct, 15, 8);
+    const icpCls     = pctClass(k.icp_ab_pct, 50, 30);
+    const acctLabel  = k.accountability_pct != null
+      ? `<span style="font-size:11px;color:${k.accountability_pct >= 90 ? 'var(--green)' : k.accountability_pct >= 75 ? 'var(--amber)' : 'var(--red)'}" title="HubSpot dials vs sheet-reported">HS ${k.dials_hs} / Sheet ${k.dials_sheet} (${k.accountability_pct}%)</span>`
+      : '';
+    html += `<div class="card">
+      <div class="card-header"><div class="card-title">📞 ${sdrName} — HubSpot Calls ${label}</div></div>
+      <div class="kpi-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:10px">
+        <div class="kpi blue"  style="padding:12px"><div class="kpi-label">Dials</div><div class="kpi-value" style="font-size:22px">${k.dials_hs.toLocaleString()}</div><div class="kpi-sub">${k.days} active days</div></div>
+        <div class="kpi teal"  style="padding:12px"><div class="kpi-label">Connect Rate</div><div class="kpi-value" style="font-size:22px"><span class="pct-num ${connectCls}">${k.connect_pct}%</span></div><div class="kpi-sub">${k.connects_hs} connects</div></div>
+        <div class="kpi green" style="padding:12px"><div class="kpi-label">Booked</div><div class="kpi-value" style="font-size:22px">${k.booked_meeting}</div><div class="kpi-sub">of ${k.asked_meeting} asked</div></div>
+        <div class="kpi amber" style="padding:12px"><div class="kpi-label">ICP A+B</div><div class="kpi-value" style="font-size:22px"><span class="pct-num ${icpCls}">${k.icp_ab_pct}%</span></div><div class="kpi-sub">${k.icp_ab} / ${k.unique_companies} co's</div></div>
+      </div>
+      <div style="text-align:right;padding-top:4px">${acctLabel}</div>
+    </div>`;
+  }
+  html += `</div>`;
+
+  // ── Pipeline cards (kept — NocoDB stages) ─────────────────────────────────
+  html += `<div class="two-col">`;
   for (const [sdr, pip] of Object.entries(hs)) {
     html += `<div class="card">
-      <div class="card-header"><div class="card-title">📞 ${sdr}'s Pipeline</div></div>
+      <div class="card-header"><div class="card-title">📊 ${sdr}'s Pipeline</div><div class="card-subtitle">NocoDB stage breakdown · all time</div></div>
       <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
         <div class="kpi blue" style="padding:12px"><div class="kpi-label">Total</div><div class="kpi-value" style="font-size:22px">${pip.total.toLocaleString()}</div></div>
         <div class="kpi green" style="padding:12px"><div class="kpi-label">Demo Booked</div><div class="kpi-value" style="font-size:22px">${pip.demo_booked}</div><div class="kpi-sub">${pip.demo_rate_pct}% rate</div></div>
@@ -1466,56 +1515,212 @@ function _renderSDRCallTable(callActivity, recentRows, label) {
         <li class="stage-item"><span class="stage-name">Future Follow Up</span><span class="stage-count">${pip.future_followup}</span></li>
         <li class="stage-item"><span class="stage-name" style="color:var(--red)">Disqualified</span><span class="stage-count" style="color:var(--red)">${pip.disqualified}</span></li>
       </ul>
-      <div style="margin-top:12px">
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Phone quality (active deals with mobile)</div>
-        ${pctBar(pip.phone_quality_pct, pip.phone_quality_pct>=75?'green':pip.phone_quality_pct>=50?'':'amber')}
-        <div style="font-size:12px;font-weight:700;color:var(--text-secondary);margin-top:4px">${pip.phone_quality_pct}%</div>
-      </div>
     </div>`;
   }
-
   html += `</div>`;
 
-  if (callActivity && callActivity.length) {
-    html += `<div class="card">
-      <div class="card-header">
-        <div class="card-title">📊 SDR Call Activity <span style="font-size:11px;font-weight:500;color:var(--text-muted);margin-left:6px">${label}</span></div>
-      </div>
-      <table class="fi-table">
-        <thead><tr><th>SDR</th><th class="right">Days</th><th class="right">Dials</th><th class="right">Connects</th><th class="right">Connect%</th><th class="right">Demos</th><th class="right">Demo%</th></tr></thead>
-        <tbody>`;
-    for (const r of callActivity) {
-      html += `<tr class="researcher-row">
-        <td class="bold">${r.name}</td>
-        <td class="right mono muted">${r.days}</td>
-        <td class="right mono">${r.dials}</td>
-        <td class="right mono">${r.connects}</td>
-        <td class="right"><span class="pct-num ${pctClass(r.connect_rate,20,10)}">${r.connect_rate}%</span></td>
-        <td class="right mono">${r.demos}</td>
-        <td class="right"><span class="pct-num ${pctClass(r.demo_rate,20,10)}">${r.demo_rate}%</span></td>
+  // ── DAILY BREAKDOWN — new 9-column funnel + ICP table ─────────────────────
+  const rowsSorted = [...(mergedRows||[])].sort((a,b) => (b.iso_date||'').localeCompare(a.iso_date||''));
+  html += `<div class="card">
+    <div class="card-header">
+      <div class="card-title">📅 Daily Breakdown — Funnel + ICP <span style="font-size:11px;font-weight:500;color:var(--text-muted);margin-left:6px">${label}</span></div>
+      <div class="card-subtitle">Dials/Connects/Funnel from HubSpot · ICP tier from pipeline_deals · Click a row for company drill-down</div>
+    </div>
+    <table class="fi-table">
+      <thead><tr>
+        <th>Date</th><th>SDR</th>
+        <th class="right">Dials</th>
+        <th class="right">Connects</th>
+        <th class="right" title="Said intro to someone">Intro</th>
+        <th class="right" title="Had a conversation beyond intro">Convo</th>
+        <th class="right" title="Asked for meeting / demo">Asked</th>
+        <th class="right" title="Booked a meeting / demo">Booked</th>
+        <th class="right" title="% of unique companies called that are Tier A or B">ICP A+B%</th>
+      </tr></thead>
+      <tbody>`;
+  if (!rowsSorted.length) {
+    html += `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:24px">No call activity recorded for this period</td></tr>`;
+  } else {
+    const displayRows = rowsSorted.slice(0, 80);
+    for (const r of displayRows) {
+      const icpCls = pctClass(r.icp_ab_pct || 0, 50, 30);
+      const connCls= pctClass(r.connect_pct || 0, 15, 8);
+      const isClickable = r.iso_date && (r.dials_hs || 0) > 0;
+      const clickAttr = isClickable
+        ? `class="res-drill-row" onclick="openSdrDrillModal('${r.iso_date}','${r.sdr}')" title="Click to see companies ${r.sdr} called on ${r.iso_date}"`
+        : '';
+      const displayDate = _formatFriendlyDate(r.iso_date);
+      html += `<tr ${clickAttr}>
+        <td class="muted mono">${displayDate}</td>
+        <td class="bold">${r.sdr}</td>
+        <td class="right mono">${r.dials_hs || '—'}</td>
+        <td class="right pct-cell"><span class="pct-num ${connCls}">${r.connects_hs || 0}</span></td>
+        <td class="right mono">${r.said_intro     || '—'}</td>
+        <td class="right mono">${r.had_convo      || '—'}</td>
+        <td class="right mono">${r.asked_meeting  || '—'}</td>
+        <td class="right mono" style="color:${(r.booked_meeting||0) > 0 ? '#4ade80' : ''};font-weight:${(r.booked_meeting||0) > 0 ? 700 : 400}">${r.booked_meeting || '—'}</td>
+        <td class="right pct-cell"><span class="pct-num ${icpCls}">${r.icp_ab_pct != null ? r.icp_ab_pct + '%' : '—'}</span></td>
       </tr>`;
     }
-    html += `</tbody></table></div>`;
   }
+  html += `</tbody></table></div>`;
 
-  if (recentRows && recentRows.length) {
-    const recentTitle = label === 'All Time' ? 'Recent SDR Activity (Last 7 Working Days)' : `Daily Breakdown · ${label}`;
-    const displayRows = label === 'All Time'
-      ? [...recentRows].reverse().slice(0, 25)
-      : recentRows.slice(0, 60);
-    html += `<div class="card">
-      <div class="card-header"><div class="card-title">📅 ${recentTitle}</div></div>
-      <table class="fi-table">
-        <thead><tr><th>Date</th><th>Rep</th><th class="right">Dials</th><th class="right">Connects</th><th class="right">Demos</th></tr></thead>
-        <tbody>`;
-    for (const r of displayRows) {
-      html += `<tr><td class="muted mono">${r.date}</td><td class="bold">${r.rep}</td>
-        <td class="right mono">${r.dials||'—'}</td><td class="right mono">${r.connects||'—'}</td><td class="right mono">${r.demos||'—'}</td></tr>`;
+  // ── ACCOUNTABILITY — HubSpot vs Kyle sheet cross-check ────────────────────
+  const kyleMap = {};
+  for (const kr of (_sdrData?.all_kyle_rows || [])) {
+    if (!kr.iso_date) continue;
+    const isoKey = kr.iso_date;
+    if (isoKey >= _sdrMonth + '-01' && isoKey <= _sdrMonth + '-31') {
+      const rk = kr.rep;
+      if (!kyleMap[rk]) kyleMap[rk] = {dials:0, connects:0, demos:0};
+      kyleMap[rk].dials    += kr.dials    || 0;
+      kyleMap[rk].connects += kr.connects || 0;
+      kyleMap[rk].demos    += kr.demos    || 0;
     }
-    html += `</tbody></table></div>`;
+  }
+  const acctSdrs = new Set([...Object.keys(kpis), ...Object.keys(kyleMap)]);
+  if (acctSdrs.size) {
+    html += `<details class="card" style="margin-top:14px">
+      <summary style="padding:12px 18px;cursor:pointer;color:var(--text-muted);font-size:13px">
+        🗂️ Accountability — HubSpot vs Kyle Sheet (${label})
+      </summary>
+      <table class="fi-table" style="margin-top:0">
+        <thead><tr>
+          <th>SDR</th>
+          <th class="right">HS Dials</th><th class="right">Sheet Dials</th>
+          <th class="right">Match %</th>
+          <th class="right">HS Booked</th><th class="right">Sheet Demos</th>
+        </tr></thead><tbody>`;
+    for (const s of acctSdrs) {
+      const k = kpis[s] || {dials_hs:0, booked_meeting:0};
+      const kyle = kyleMap[s] || {dials:0, demos:0};
+      const matchPct = kyle.dials ? Math.round(k.dials_hs / kyle.dials * 100) : null;
+      const matchCls = matchPct == null ? '' : pctClass(matchPct, 90, 75);
+      html += `<tr>
+        <td class="bold">${s}</td>
+        <td class="right mono">${k.dials_hs || 0}</td>
+        <td class="right mono muted">${kyle.dials || 0}</td>
+        <td class="right pct-cell">${matchPct != null ? `<span class="pct-num ${matchCls}">${matchPct}%</span>` : '—'}</td>
+        <td class="right mono">${k.booked_meeting || 0}</td>
+        <td class="right mono muted">${kyle.demos || 0}</td>
+      </tr>`;
+    }
+    html += `</tbody></table></details>`;
   }
 
   document.getElementById('sdr-content').innerHTML = html;
+}
+
+function _formatFriendlyDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso + 'T00:00:00');
+  if (isNaN(d)) return iso;
+  return d.toLocaleDateString('en-GB', {day:'numeric', month:'short'});
+}
+
+// ── SDR DRILL-DOWN MODAL (reuses existing drill-backdrop/drill-modal) ────────
+let _sdrDrillData = null;
+let _sdrDrillTier = 'ALL';
+
+async function openSdrDrillModal(isoDate, sdr) {
+  _sdrDrillData = null;
+  _sdrDrillTier = 'ALL';
+
+  const backdrop = document.getElementById('drill-backdrop');
+  backdrop.classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  document.getElementById('drill-title').textContent = `${sdr}'s Calls — ${_formatFriendlyDate(isoDate)}`;
+  document.getElementById('drill-meta').textContent  = 'Fetching call history from HubSpot…';
+  document.getElementById('drill-pills').innerHTML   = '';
+  document.getElementById('drill-content').innerHTML = '<div class="drill-spinner">⏳ Loading companies…</div>';
+
+  try {
+    const res  = await fetch(`/api/sdr-drill?date=${isoDate}&sdr=${sdr}&key=${API_KEY}`);
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Failed to load');
+    _sdrDrillData = json.data;
+    _renderSdrDrillHeader();
+    _renderSdrDrillBody();
+  } catch (e) {
+    document.getElementById('drill-content').innerHTML =
+      `<div style="color:#fca5a5;padding:32px;text-align:center">Error: ${e.message}</div>`;
+  }
+}
+
+function _renderSdrDrillHeader() {
+  const d  = _sdrDrillData;
+  const tc = d.tier_counts || {A:0,B:0,C:0,X:0,'?':0};
+  const pctCls = d.icp_ab_pct >= 50 ? 'good' : d.icp_ab_pct >= 30 ? 'warn' : 'bad';
+
+  document.getElementById('drill-meta').innerHTML =
+    `${d.total_companies} companies · ${d.total_calls} calls · ` +
+    `<strong style="color:var(--${pctCls})">${d.icp_ab_pct}% ICP A+B</strong> (${d.icp_ab} of ${d.total_companies})`;
+
+  document.getElementById('drill-pills').innerHTML = `
+    <button class="drill-pill dp-all active"  onclick="sdrDrillFilter('ALL', this)">All ${d.total_companies}</button>
+    <button class="drill-pill dp-a"            onclick="sdrDrillFilter('A',   this)">🟢 A-Tier ${tc.A||0}</button>
+    <button class="drill-pill dp-b"            onclick="sdrDrillFilter('B',   this)">🟡 B-Tier ${tc.B||0}</button>
+    <button class="drill-pill dp-c"            onclick="sdrDrillFilter('C',   this)">⚪ C-Tier ${tc.C||0}</button>
+    <button class="drill-pill dp-x"            onclick="sdrDrillFilter('X',   this)">🔴 X-Tier ${tc.X||0}</button>`;
+}
+
+function sdrDrillFilter(tier, btn) {
+  _sdrDrillTier = tier;
+  document.querySelectorAll('#drill-pills .drill-pill').forEach(el => el.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  _renderSdrDrillBody();
+}
+
+function _renderSdrDrillBody() {
+  const d = _sdrDrillData;
+  if (!d) return;
+  const filtered = _sdrDrillTier === 'ALL'
+    ? d.companies
+    : d.companies.filter(c => c.tier === _sdrDrillTier);
+  const stageLabel = {
+    no_contact: '—', intro: '👋 Intro', convo: '💬 Convo', asked: '📋 Asked', booked: '📅 Booked',
+  };
+  let html = `<table class="drill-table">
+    <thead><tr>
+      <th>SDR</th>
+      <th>Company</th>
+      <th>Industry</th>
+      <th style="text-align:center">ICP</th>
+      <th style="text-align:right">Calls</th>
+      <th>Stage Reached</th>
+      <th>Last Outcome</th>
+      <th>Contact · Phone</th>
+    </tr></thead><tbody>`;
+  if (!filtered.length) {
+    html += `<tr><td colspan="8" style="text-align:center;color:#6b7280;padding:32px">No companies in this tier</td></tr>`;
+  } else {
+    for (const c of filtered) {
+      const tierEmoji = {A:'🟢',B:'🟡',C:'⚪',X:'🔴','?':'—'}[c.tier] || '—';
+      const tierColor = {A:'#4ade80',B:'#facc15',C:'#d1d5db',X:'#f87171'}[c.tier] || '#9ca3af';
+      const phoneBits = c.phone
+        ? `<div class="drill-phone has-phone">📞 ${c.phone}</div>`
+        : `<div class="drill-phone no-phone">— no phone</div>`;
+      const contactLine = c.contact
+        ? `<div style="font-size:13px;color:#e5e7eb">${c.contact}</div>`
+        : `<div style="font-size:12px;color:#6b7280">—</div>`;
+      html += `<tr>
+        <td style="color:#cbd5e1">${c.sdr}</td>
+        <td>
+          <div style="font-weight:700;color:#ffffff">${c.company_name||'—'}</div>
+          <div style="font-size:11px;color:#9ca3af">${c.company_domain||''}</div>
+        </td>
+        <td style="color:#d1d5db">${c.industry||'—'}</td>
+        <td style="text-align:center;color:${tierColor};font-weight:700">${tierEmoji} ${c.tier}</td>
+        <td style="text-align:right;color:#ffffff;font-weight:600">${c.calls}</td>
+        <td style="color:#cbd5e1">${stageLabel[c.reached_stage]||'—'}</td>
+        <td style="color:#9ca3af;font-size:12px">${c.last_outcome||'—'}</td>
+        <td>${contactLine}${phoneBits}</td>
+      </tr>`;
+    }
+  }
+  html += `</tbody></table>`;
+  document.getElementById('drill-content').innerHTML = html;
 }
 
 // ── RENDER: AE Review ────────────────────────────────────────────────────────

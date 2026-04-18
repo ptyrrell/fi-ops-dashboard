@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.8.0"
+APP_VERSION = "v2.9.0"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -43,6 +43,7 @@ NOCO_BASE_URL       = os.getenv("NOCODB_BASE_URL", "https://app.nocodb.com")
 NOCO_TOKEN          = os.getenv("NOCODB_TOKEN", "")
 NOCO_PROJECT_ID     = os.getenv("NOCODB_PROJECT_ID", "pmnqbv38yudws3v")
 NOCO_DEALS_TABLE    = os.getenv("NOCODB_DEALS_TABLE_ID", "migi5lc0fb9zhie")
+NOCO_SDR_CALLS_TBL  = os.getenv("NOCODB_SDR_CALLS_TBL",   "mrhbubrruqt6mxi")
 # Candidate audit — Employee Nirvana base
 NOCO_HR_BASE_ID     = os.getenv("NOCODB_HR_BASE_ID",    "ptha3v85jd54lva")
 NOCO_CANDIDATES_TBL = os.getenv("NOCODB_CANDIDATES_TBL","mhgfkpd0xwc51ca")
@@ -733,6 +734,84 @@ def _fetch_researcher_activity():
         "updated_at":      datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
 
+# ── Data: SDR calls from NocoDB sdr_calls (HubSpot-sourced) ──────────────────
+
+@_cached("sdr_calls_raw", ttl=900)
+def _fetch_sdr_calls_all() -> list:
+    """Pull every row from the sdr_calls table."""
+    return _noco_get_all(
+        NOCO_SDR_CALLS_TBL,
+        fields=("Id,call_id,sdr,owner_id,call_date,call_timestamp,direction,source,"
+                "duration_ms,outcome,said_intro,had_convo,asked_meeting,booked_meeting,"
+                "contact_name,contact_phone,contact_mobile,company_id,company_name,"
+                "company_domain,company_industry,icp_tier,icp_score_note,icp_source"),
+    )
+
+
+def _aggregate_sdr_calls_by_date(rows: list) -> dict:
+    """
+    Returns { iso_date: { sdr: { dials, connects, said_intro, had_convo,
+                                 asked_meeting, booked_meeting,
+                                 icp_a, icp_b, icp_c, icp_x, icp_ab, icp_ab_pct } } }
+    Dedup by company_id within a single (sdr, date) for the ICP quality numbers
+    so a repeat dial doesn't inflate the "Tier A companies reached" count.
+    """
+    by_date: dict = {}
+    for r in rows:
+        sdr = (r.get("sdr") or "").strip()
+        if not sdr: continue
+        iso = (r.get("call_date") or "")[:10]
+        if not iso: continue
+        slot = by_date.setdefault(iso, {}).setdefault(sdr, {
+            "dials": 0, "connects": 0,
+            "said_intro": 0, "had_convo": 0,
+            "asked_meeting": 0, "booked_meeting": 0,
+            "companies": set(),
+            "company_tiers": {},   # company_id -> tier (first seen that day)
+        })
+        slot["dials"] += 1
+        if r.get("outcome") in ("connected", "booked"):
+            slot["connects"] += 1
+        if r.get("said_intro"):     slot["said_intro"]     += 1
+        if r.get("had_convo"):      slot["had_convo"]      += 1
+        if r.get("asked_meeting"):  slot["asked_meeting"]  += 1
+        if r.get("booked_meeting"): slot["booked_meeting"] += 1
+        cid = str(r.get("company_id") or "").strip()
+        if cid:
+            slot["companies"].add(cid)
+            if cid not in slot["company_tiers"]:
+                slot["company_tiers"][cid] = (r.get("icp_tier") or "").strip().upper()
+
+    result: dict = {}
+    for iso, sdrs in by_date.items():
+        result[iso] = {}
+        for sdr, slot in sdrs.items():
+            tier_counts = {"A": 0, "B": 0, "C": 0, "X": 0}
+            for tier in slot["company_tiers"].values():
+                if tier in tier_counts: tier_counts[tier] += 1
+            total_co = sum(tier_counts.values())
+            ab = tier_counts["A"] + tier_counts["B"]
+            ab_pct = round(ab / total_co * 100) if total_co else 0
+            connect_pct = round(slot["connects"] / slot["dials"] * 100) if slot["dials"] else 0
+            result[iso][sdr] = {
+                "dials":          slot["dials"],
+                "connects":       slot["connects"],
+                "connect_pct":    connect_pct,
+                "said_intro":     slot["said_intro"],
+                "had_convo":      slot["had_convo"],
+                "asked_meeting":  slot["asked_meeting"],
+                "booked_meeting": slot["booked_meeting"],
+                "unique_companies": total_co,
+                "icp_a":     tier_counts["A"],
+                "icp_b":     tier_counts["B"],
+                "icp_c":     tier_counts["C"],
+                "icp_x":     tier_counts["X"],
+                "icp_ab":    ab,
+                "icp_ab_pct": ab_pct,
+            }
+    return result
+
+
 # ── Data: SDR Review (NocoDB for pipeline, Sheets for call activity) ──────────
 
 @_cached("sdr_activity", ttl=1800)
@@ -842,13 +921,120 @@ def _fetch_sdr_activity():
             "demos":    n(row, 4),
         })
 
+    # ── HubSpot-sourced call data (new) ───────────────────────────────────────
+    try:
+        hs_rows = _fetch_sdr_calls_all()
+    except Exception as e:
+        log.warning(f"Could not fetch sdr_calls: {e}")
+        hs_rows = []
+
+    hs_by_date = _aggregate_sdr_calls_by_date(hs_rows)
+
+    # Flatten hs_by_date into all_hs_rows (one row per sdr per date)
+    all_hs_rows = []
+    for iso, sdrs in hs_by_date.items():
+        for sdr, s in sdrs.items():
+            all_hs_rows.append({"iso_date": iso, "sdr": sdr, **s})
+    all_hs_rows.sort(key=lambda r: (r["iso_date"], r["sdr"]), reverse=True)
+
+    # Merged daily breakdown — one row per (sdr, date), combining HubSpot + sheet
+    merged_rows = []
+    # Build kyle lookup: (sdr, iso_date) -> row
+    kyle_lookup = {}
+    for kr in all_kyle_rows_export:
+        if kr["iso_date"]:
+            key = (kr["rep"].lower(), kr["iso_date"])
+            kyle_lookup[key] = kr
+
+    # Seed merged set with all dates seen in either source
+    seen = set()
+    for hr in all_hs_rows:
+        key = (hr["sdr"].lower(), hr["iso_date"])
+        seen.add(key)
+        kr = kyle_lookup.get(key, {})
+        merged_rows.append({
+            "iso_date":       hr["iso_date"],
+            "sdr":            hr["sdr"],
+            # HubSpot (primary)
+            "dials_hs":       hr["dials"],
+            "connects_hs":    hr["connects"],
+            "connect_pct":    hr["connect_pct"],
+            "said_intro":     hr["said_intro"],
+            "had_convo":      hr["had_convo"],
+            "asked_meeting":  hr["asked_meeting"],
+            "booked_meeting": hr["booked_meeting"],
+            "icp_a":          hr["icp_a"],
+            "icp_b":          hr["icp_b"],
+            "icp_c":          hr["icp_c"],
+            "icp_x":          hr["icp_x"],
+            "icp_ab":         hr["icp_ab"],
+            "icp_ab_pct":     hr["icp_ab_pct"],
+            "unique_companies": hr["unique_companies"],
+            # Kyle sheet (cross-check)
+            "dials_sheet":    kr.get("dials", 0),
+            "connects_sheet": kr.get("connects", 0),
+            "demos_sheet":    kr.get("demos", 0),
+        })
+
+    # Add kyle-only rows (days SDR reported activity but HubSpot had none)
+    for key, kr in kyle_lookup.items():
+        if key in seen: continue
+        sdr_name = kr["rep"]
+        merged_rows.append({
+            "iso_date":       kr["iso_date"],
+            "sdr":            sdr_name,
+            "dials_hs":       0, "connects_hs": 0, "connect_pct": 0,
+            "said_intro": 0, "had_convo": 0, "asked_meeting": 0, "booked_meeting": 0,
+            "icp_a": 0, "icp_b": 0, "icp_c": 0, "icp_x": 0, "icp_ab": 0,
+            "icp_ab_pct": 0, "unique_companies": 0,
+            "dials_sheet":    kr.get("dials", 0),
+            "connects_sheet": kr.get("connects", 0),
+            "demos_sheet":    kr.get("demos", 0),
+        })
+    merged_rows.sort(key=lambda r: (r["iso_date"] or "", r["sdr"]), reverse=True)
+
+    # SDR-level headline KPIs (summed across all data)
+    sdr_kpis = {}
+    for sdr_name in ["Tim", "Jay"]:
+        mine = [r for r in merged_rows if r["sdr"].lower() == sdr_name.lower()]
+        if not mine: continue
+        total_dials_hs     = sum(r["dials_hs"] for r in mine)
+        total_connects_hs  = sum(r["connects_hs"] for r in mine)
+        total_booked       = sum(r["booked_meeting"] for r in mine)
+        total_intro        = sum(r["said_intro"] for r in mine)
+        total_convo        = sum(r["had_convo"] for r in mine)
+        total_asked        = sum(r["asked_meeting"] for r in mine)
+        total_ab           = sum(r["icp_ab"] for r in mine)
+        total_companies    = sum(r["unique_companies"] for r in mine)
+        total_dials_sheet  = sum(r["dials_sheet"] for r in mine)
+        connect_pct        = round(total_connects_hs / total_dials_hs * 100) if total_dials_hs else 0
+        icp_ab_pct         = round(total_ab / total_companies * 100) if total_companies else 0
+        sdr_kpis[sdr_name] = {
+            "dials_hs":        total_dials_hs,
+            "connects_hs":     total_connects_hs,
+            "connect_pct":     connect_pct,
+            "said_intro":      total_intro,
+            "had_convo":       total_convo,
+            "asked_meeting":   total_asked,
+            "booked_meeting":  total_booked,
+            "icp_ab":          total_ab,
+            "icp_ab_pct":      icp_ab_pct,
+            "total_companies": total_companies,
+            "dials_sheet":     total_dials_sheet,
+            "accountability_pct": round(total_dials_hs / total_dials_sheet * 100) if total_dials_sheet else None,
+        }
+
     return {
         "hs_pipeline":    hs_sdr,
         "call_activity":  sdr_totals,
         "recent_activity": recent_kyle[-40:],
         "all_kyle_rows":  all_kyle_rows_export,
+        # NEW: HubSpot-sourced call data
+        "sdr_kpis":       sdr_kpis,
+        "all_hs_rows":    all_hs_rows,
+        "daily_merged":   merged_rows,
         "updated_at":     datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-        "data_source":    "NocoDB pipeline + Google Sheets call log",
+        "data_source":    "HubSpot calls (sdr_calls) + NocoDB pipeline + Google Sheets",
     }
 
 # ── Data: AE / Sales Review (HubSpot — Natasha + Main, small dataset) ─────────
@@ -1403,6 +1589,108 @@ def api_researcher_drill():
         }})
     except Exception as e:
         log.error(f"researcher-drill error: {e}", exc_info=True)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sdr-drill")
+def api_sdr_drill():
+    """
+    Returns all companies an SDR called on a specific date, with ICP tier, # calls,
+    last outcome, phone, contact, and funnel stage reached.
+    Query params:
+      date=YYYY-MM-DD (required)
+      sdr=Tim|Jay|all  (default all)
+    """
+    _require_key()
+    iso_date = request.args.get("date", "").strip()
+    sdr_filter = (request.args.get("sdr", "all") or "all").strip().lower()
+    if not iso_date:
+        return jsonify({"ok": False, "error": "date=YYYY-MM-DD required"}), 400
+
+    try:
+        rows = _fetch_sdr_calls_all()
+
+        # Filter to that date (and optional SDR)
+        matched = []
+        for r in rows:
+            dc = (r.get("call_date") or "")[:10]
+            if dc != iso_date: continue
+            if sdr_filter != "all" and (r.get("sdr") or "").lower() != sdr_filter:
+                continue
+            matched.append(r)
+
+        # Group by (sdr, company_id or name) and aggregate
+        group_key_to_entry: dict = {}
+        for r in matched:
+            cid   = str(r.get("company_id") or "").strip()
+            cname = (r.get("company_name") or "").strip()
+            sdr   = r.get("sdr") or ""
+            gkey  = (sdr, cid or cname.lower() or r.get("call_id",""))
+            entry = group_key_to_entry.get(gkey)
+            if not entry:
+                entry = {
+                    "sdr":            sdr,
+                    "company_id":     cid,
+                    "company_name":   cname or "(no company)",
+                    "company_domain": r.get("company_domain", ""),
+                    "industry":       r.get("company_industry", ""),
+                    "tier":           (r.get("icp_tier") or "").upper() or "?",
+                    "icp_note":       r.get("icp_score_note", ""),
+                    "icp_source":     r.get("icp_source", ""),
+                    "calls":          0,
+                    "last_ts":        "",
+                    "last_outcome":   "",
+                    "phone":          r.get("contact_phone") or r.get("contact_mobile") or "",
+                    "contact":        r.get("contact_name", ""),
+                    "reached_stage":  "",  # highest funnel stage reached
+                    "said_intro":     False,
+                    "had_convo":      False,
+                    "asked_meeting":  False,
+                    "booked_meeting": False,
+                }
+                group_key_to_entry[gkey] = entry
+            entry["calls"] += 1
+            ts = r.get("call_timestamp", "")
+            if ts > entry["last_ts"]:
+                entry["last_ts"]      = ts
+                entry["last_outcome"] = r.get("outcome", "")
+            for f in ("said_intro","had_convo","asked_meeting","booked_meeting"):
+                if r.get(f):
+                    entry[f] = True
+
+        # Compute the highest funnel stage for each company
+        for e in group_key_to_entry.values():
+            if   e["booked_meeting"]: e["reached_stage"] = "booked"
+            elif e["asked_meeting"]:  e["reached_stage"] = "asked"
+            elif e["had_convo"]:      e["reached_stage"] = "convo"
+            elif e["said_intro"]:     e["reached_stage"] = "intro"
+            else:                     e["reached_stage"] = "no_contact"
+
+        # Sort by tier (A→X) then calls desc
+        tier_order = {"A":0,"B":1,"C":2,"X":3,"?":4}
+        companies = sorted(group_key_to_entry.values(),
+                           key=lambda e: (tier_order.get(e["tier"], 5), -e["calls"]))
+
+        tier_counts = {"A":0,"B":0,"C":0,"X":0,"?":0}
+        for e in companies:
+            tier_counts[e["tier"] if e["tier"] in tier_counts else "?"] += 1
+
+        total_calls = sum(e["calls"] for e in companies)
+        ab = tier_counts["A"] + tier_counts["B"]
+        ab_pct = round(ab / len(companies) * 100) if companies else 0
+
+        return jsonify({"ok": True, "data": {
+            "date":        iso_date,
+            "sdr_filter":  sdr_filter,
+            "total_calls": total_calls,
+            "total_companies": len(companies),
+            "tier_counts": tier_counts,
+            "icp_ab":      ab,
+            "icp_ab_pct":  ab_pct,
+            "companies":   companies,
+        }})
+    except Exception as e:
+        log.error(f"sdr-drill error: {e}", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
 
 

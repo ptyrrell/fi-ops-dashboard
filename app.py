@@ -20,6 +20,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict, Counter
 from functools import wraps
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, jsonify, request, render_template, abort
 from dotenv import load_dotenv
 
@@ -749,21 +750,54 @@ def _fetch_sdr_daily_agg() -> list:
     )
 
 
-@_cached("sdr_calls_by_sdr", ttl=900)
+@_cached("sdr_calls_by_sdr", ttl=1800)
 def _fetch_sdr_calls_by_sdr(sdr_filter: str) -> list:
-    """Fetch all calls for one SDR (NocoDB can't filter on call_date column).
-    Cached per-sdr; ~5k rows max per SDR. Date filtering is done in-memory."""
-    where = None
-    if sdr_filter.lower() != "all":
-        where = f"(sdr,eq,{sdr_filter.capitalize()})"
-    return _noco_get_all(
-        NOCO_SDR_CALLS_TBL, where=where,
-        fields=("call_id,sdr,call_date,call_timestamp,outcome,duration_ms,"
-                "said_intro,had_convo,asked_meeting,booked_meeting,"
-                "contact_name,contact_phone,contact_mobile,"
-                "company_id,company_name,company_domain,company_industry,"
-                "icp_tier,icp_score_note,icp_source"),
-    )
+    """Fetch all calls for one SDR in parallel page-chunks.
+    NocoDB can't filter on call_date — we pull by sdr, filter dates in-memory.
+    Cached 30min; ~5k rows max per SDR."""
+    where = f"(sdr,eq,{sdr_filter.capitalize()})" if sdr_filter.lower() != "all" else None
+    fields = ("call_id,sdr,call_date,call_timestamp,outcome,duration_ms,"
+              "said_intro,had_convo,asked_meeting,booked_meeting,"
+              "contact_name,contact_phone,contact_mobile,"
+              "company_id,company_name,company_domain,company_industry,"
+              "icp_tier,icp_score_note,icp_source")
+
+    PAGE_SIZE = 100
+    MAX_RETRIES = 4
+    url = f"{NOCO_BASE_URL}/api/v1/db/data/noco/{NOCO_PROJECT_ID}/{NOCO_SDR_CALLS_TBL}"
+
+    def _get_page(offset: int) -> tuple:
+        params = {"limit": PAGE_SIZE, "offset": offset, "fields": fields}
+        if where: params["where"] = where
+        for attempt in range(MAX_RETRIES):
+            r = requests.get(url, headers=_noco_headers(), params=params, timeout=20)
+            if r.status_code == 429:
+                time.sleep(1.5 * (2 ** attempt))
+                continue
+            r.raise_for_status()
+            j = r.json()
+            return j.get("list", []), j.get("pageInfo", {}).get("isLastPage", True)
+        return [], True
+
+    first_batch, is_last = _get_page(0)
+    rows = list(first_batch)
+    if is_last or len(first_batch) < PAGE_SIZE:
+        log.info(f"NocoDB: loaded {len(rows)} rows from {NOCO_SDR_CALLS_TBL} (sdr={sdr_filter})")
+        return rows
+
+    offsets = list(range(PAGE_SIZE, 60 * PAGE_SIZE, PAGE_SIZE))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(_get_page, off): off for off in offsets}
+        hit_last = False
+        for fut in as_completed(futures):
+            batch, last = fut.result()
+            rows.extend(batch)
+            if last or len(batch) < PAGE_SIZE:
+                hit_last = True
+        if not hit_last:
+            log.warning("sdr_calls: hit 60-page parallel cap — may be truncated")
+    log.info(f"NocoDB: loaded {len(rows)} rows from {NOCO_SDR_CALLS_TBL} (sdr={sdr_filter}, parallel)")
+    return rows
 
 
 def _fetch_sdr_calls_by_date(iso_date: str, sdr_filter: str = "all") -> list:

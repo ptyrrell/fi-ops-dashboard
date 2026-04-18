@@ -806,10 +806,9 @@ def _fetch_sdr_daily_agg() -> list:
     Populated by `alfred/tools/sync_sdr_calls.py rebuild_daily_agg()`."""
     return _noco_get_all(
         NOCO_SDR_DAILY_AGG,
-        fields=("iso_date,sdr,week_key,dials,connects,hs_connects,"
-                "said_intro,had_convo,asked_meeting,booked_meeting,"
-                "unique_companies,icp_a,icp_b,icp_c,icp_x,"
-                "updated_at,drill_json"),
+        fields=("iso_date,sdr,week_key,dials,connects,said_intro,had_convo,"
+                "asked_meeting,booked_meeting,unique_companies,"
+                "icp_a,icp_b,icp_c,icp_x,updated_at,drill_json"),
     )
 
 
@@ -1304,7 +1303,9 @@ def api_researchers():
 @app.route("/api/sdr")
 def api_sdr():
     _require_key()
-    if request.args.get("force") == "1": _bust_cache("sdr_activity")
+    if request.args.get("force") == "1":
+        _bust_cache("sdr_activity")
+        _bust_cache("sdr_daily_agg")
     try:
         return jsonify({"ok": True, "data": _fetch_sdr_activity()})
     except Exception as e:

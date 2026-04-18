@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.9.0"
+APP_VERSION = "v2.9.1"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -749,12 +749,13 @@ def _fetch_sdr_daily_agg() -> list:
     )
 
 
-@_cached("sdr_calls_by_date", ttl=900)
-def _fetch_sdr_calls_by_date(iso_date: str, sdr_filter: str = "all") -> list:
-    """Targeted fetch for drill-down — one date, one sdr (or all)."""
-    where = f"(call_date,eq,{iso_date})"
+@_cached("sdr_calls_by_sdr", ttl=900)
+def _fetch_sdr_calls_by_sdr(sdr_filter: str) -> list:
+    """Fetch all calls for one SDR (NocoDB can't filter on call_date column).
+    Cached per-sdr; ~5k rows max per SDR. Date filtering is done in-memory."""
+    where = None
     if sdr_filter.lower() != "all":
-        where += f"~and(sdr,eq,{sdr_filter.capitalize()})"
+        where = f"(sdr,eq,{sdr_filter.capitalize()})"
     return _noco_get_all(
         NOCO_SDR_CALLS_TBL, where=where,
         fields=("call_id,sdr,call_date,call_timestamp,outcome,duration_ms,"
@@ -763,6 +764,12 @@ def _fetch_sdr_calls_by_date(iso_date: str, sdr_filter: str = "all") -> list:
                 "company_id,company_name,company_domain,company_industry,"
                 "icp_tier,icp_score_note,icp_source"),
     )
+
+
+def _fetch_sdr_calls_by_date(iso_date: str, sdr_filter: str = "all") -> list:
+    """Return calls matching {iso_date, sdr_filter} — filters in Python."""
+    rows = _fetch_sdr_calls_by_sdr(sdr_filter)
+    return [r for r in rows if (r.get("call_date") or "")[:10] == iso_date]
 
 
 def _aggregate_sdr_calls_by_date(agg_rows: list) -> dict:

@@ -239,8 +239,8 @@
                    box-shadow:0 24px 60px rgba(0,0,0,.6); }
     .drill-header { display:flex;align-items:flex-start;justify-content:space-between;
                     padding:20px 24px 16px;border-bottom:1px solid #1f2937; }
-    .drill-title { font-size:15px;font-weight:700;color:#f9fafb; }
-    .drill-meta  { font-size:12px;color:#9ca3af;margin-top:3px; }
+    .drill-title { font-size:15px;font-weight:700;color:#ffffff; }
+    .drill-meta  { font-size:12px;color:#d1d5db;margin-top:3px; }
     .drill-close { background:none;border:none;color:#6b7280;font-size:20px;cursor:pointer;
                    line-height:1;padding:2px 6px;border-radius:4px; }
     .drill-close:hover { color:#f9fafb;background:#374151; }
@@ -256,13 +256,17 @@
     .drill-body  { overflow-y:auto;flex:1; }
     .drill-table { width:100%;border-collapse:collapse; }
     .drill-table th { position:sticky;top:0;background:#111827;padding:10px 16px;
-                      font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;
+                      font-size:11px;font-weight:700;color:#9ca3af;text-transform:uppercase;
                       letter-spacing:.6px;text-align:left;border-bottom:1px solid #1f2937; }
     .drill-table td { padding:9px 16px;font-size:13px;border-bottom:1px solid #1a2234;
-                      color:#d1d5db;vertical-align:top; }
+                      color:#f3f4f6;vertical-align:top; }
     .drill-table tr:last-child td { border-bottom:none; }
-    .drill-table tr:hover td { background:#1f2937; }
-    .drill-note  { font-size:11px;color:#6b7280;margin-top:2px; }
+    .drill-table tr:hover td { background:#1f2937;color:#ffffff; }
+    .drill-note  { font-size:11px;color:#9ca3af;margin-top:2px; }
+    .drill-phone { font-size:12px;font-weight:700;white-space:nowrap; }
+    .drill-phone.has-phone  { color:#4ade80; }
+    .drill-phone.no-phone   { color:#6b7280; }
+    .drill-phone.no-mobile  { color:#f87171; }
     .drill-spinner { padding:32px;text-align:center;color:#6b7280;font-size:13px; }
     /* clickable researcher rows */
     .res-drill-row { cursor:pointer; }
@@ -384,7 +388,7 @@
     </div>
 
     <div class="sidebar-footer">
-      Built by Alfred · FI-OPS v2.6<br>
+      Built by Alfred · FI-OPS v2.7<br>
       Data: HubSpot + Sheets
     </div>
   </nav>
@@ -2055,7 +2059,7 @@ function openDrillModal(isoDate, displayDate) {
   const backdrop = document.getElementById('drill-backdrop');
   backdrop.classList.add('open');
   document.getElementById('drill-title').textContent = `ICP Breakdown — ${displayDate}`;
-  document.getElementById('drill-meta').textContent  = 'Fetching companies from NocoDB…';
+  document.getElementById('drill-meta').textContent  = 'Fetching companies from NocoDB + HubSpot…';
   document.getElementById('drill-pills').innerHTML   = '';
   document.getElementById('drill-content').innerHTML = '<div class="drill-spinner">⏳ Loading companies…</div>';
   document.body.style.overflow = 'hidden';
@@ -2067,10 +2071,13 @@ function openDrillModal(isoDate, displayDate) {
       const d = res.data;
       _drillRows = d.rows || [];
       const pctCls = d.icp_pct >= 40 ? 'good' : d.icp_pct >= 25 ? 'warn' : 'bad';
+      const phoneStr = d.total_with_phone != null
+        ? ` · <span style="color:#4ade80">📞 ${d.total_with_phone} with phone</span>`
+        : '';
       document.getElementById('drill-meta').innerHTML =
-        `${d.total} companies in HubSpot · ` +
+        `${d.total} companies · ` +
         `<strong style="color:var(--${pctCls})">${d.icp_pct}% ICP A+B</strong> ` +
-        `(${d.icp_ab} of ${d.total})`;
+        `(${d.icp_ab} of ${d.total})${phoneStr}`;
 
       // Build filter pills
       const counts = { all: d.total };
@@ -2102,7 +2109,7 @@ function renderDrillTable(tier) {
   const rows = tier === 'all' ? _drillRows : _drillRows.filter(r => r.tier === tier);
   if (!rows.length) {
     document.getElementById('drill-content').innerHTML =
-      `<p style="padding:24px;color:#6b7280;font-size:13px">No companies for this filter.</p>`;
+      `<p style="padding:24px;color:#9ca3af;font-size:13px">No companies for this filter.</p>`;
     return;
   }
   let html = `<table class="drill-table">
@@ -2110,23 +2117,42 @@ function renderDrillTable(tier) {
       <th>#</th>
       <th>Company</th>
       <th>Industry</th>
-      <th style="text-align:center">ICP Tier</th>
+      <th style="text-align:center">ICP</th>
+      <th style="text-align:center">📞 Phone</th>
       <th>Score Note</th>
     </tr></thead><tbody>`;
   rows.forEach((r, i) => {
     const tc  = TIER_COLOR[r.tier] || '#9ca3af';
     const tbg = TIER_BG[r.tier]   || '#1f2937';
+
+    // Phone cell
+    let phoneHtml;
+    if (r.phone_count != null) {
+      if (r.phone_count > 0) {
+        phoneHtml = `<span class="drill-phone has-phone">✓ ${r.phone_count}</span>`;
+      } else if (r.no_mobile) {
+        phoneHtml = `<span class="drill-phone no-mobile">✕ none</span>`;
+      } else {
+        phoneHtml = `<span class="drill-phone no-phone">—</span>`;
+      }
+    } else {
+      phoneHtml = r.no_mobile
+        ? `<span class="drill-phone no-mobile">✕ none</span>`
+        : `<span class="drill-phone no-phone">—</span>`;
+    }
+
     html += `<tr>
-      <td style="color:#4b5563;font-size:11px">${i+1}</td>
-      <td style="font-weight:600">${r.company}</td>
-      <td style="color:#9ca3af">${r.industry}</td>
+      <td style="color:#6b7280;font-size:11px">${i+1}</td>
+      <td style="font-weight:700;color:#ffffff">${r.company}</td>
+      <td style="color:#d1d5db">${r.industry}</td>
       <td style="text-align:center">
         <span style="display:inline-block;font-size:12px;font-weight:700;
                      color:${tc};background:${tbg};padding:2px 10px;border-radius:10px">
           ${r.tier}
         </span>
       </td>
-      <td><div class="drill-note">${r.note || '—'}</div></td>
+      <td style="text-align:center">${phoneHtml}</td>
+      <td><div class="drill-note" style="color:#d1d5db">${r.note || '—'}</div></td>
     </tr>`;
   });
   html += '</tbody></table>';

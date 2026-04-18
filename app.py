@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.6.0"
+APP_VERSION = "v2.7.0"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -1196,7 +1196,7 @@ def _quick_score_resume(text: str) -> dict:
 def api_researcher_drill():
     """
     Returns the list of companies added on a specific date (or ISO week),
-    with ICP tier and score note, for the researcher row drill-down modal.
+    with ICP tier, score note, and HubSpot contact phone counts.
     Query params: date=YYYY-MM-DD  OR  week=YYYY-Www
     """
     _require_key()
@@ -1206,7 +1206,7 @@ def api_researcher_drill():
     try:
         deals = _noco_get_all(
             NOCO_DEALS_TABLE,
-            fields="company_id,company_name,industry,icp_tier,icp_score,deal_created",
+            fields="company_id,company_name,industry,icp_tier,icp_score,deal_created,is_no_mobile",
         )
 
         # Filter to date or week
@@ -1236,28 +1236,81 @@ def api_researcher_drill():
                 seen.add(key)
                 unique.append(d)
 
+        # Batch-fetch contact phone counts from HubSpot for all company_ids
+        company_ids = [str(d["company_id"]) for d in unique if d.get("company_id")]
+        phone_counts: dict = {}   # company_id -> int count of contacts with phone
+
+        if company_ids and HUBSPOT_API_KEY:
+            try:
+                # Step 1: get contact associations for all companies in one batch
+                assoc_r = requests.post(
+                    "https://api.hubapi.com/crm/v4/associations/companies/contacts/batch/read",
+                    headers=_hs_headers(),
+                    json={"inputs": [{"id": cid} for cid in company_ids]},
+                    timeout=10,
+                )
+                # company_id -> [contact_id, ...]
+                co_contacts: dict = {}
+                if assoc_r.ok:
+                    for item in assoc_r.json().get("results", []):
+                        co_id = str(item.get("from", {}).get("id", ""))
+                        co_contacts[co_id] = [str(t["toObjectId"]) for t in item.get("to", [])]
+
+                # Step 2: batch-read contacts that have any association
+                all_contact_ids = list({c for ids in co_contacts.values() for c in ids})
+                contact_phones: dict = {}  # contact_id -> has phone (bool)
+                batch_size = 100
+                for i in range(0, len(all_contact_ids), batch_size):
+                    batch = all_contact_ids[i:i+batch_size]
+                    cr = requests.post(
+                        "https://api.hubapi.com/crm/v3/objects/contacts/batch/read",
+                        headers=_hs_headers(),
+                        json={"properties": ["phone", "mobilephone"],
+                              "inputs": [{"id": c} for c in batch]},
+                        timeout=10,
+                    )
+                    if cr.ok:
+                        for cont in cr.json().get("results", []):
+                            p = cont["properties"]
+                            has_ph = bool((p.get("phone") or "").strip() or
+                                         (p.get("mobilephone") or "").strip())
+                            contact_phones[str(cont["id"])] = has_ph
+
+                # Step 3: count contacts-with-phone per company
+                for co_id, cids in co_contacts.items():
+                    phone_counts[co_id] = sum(1 for c in cids if contact_phones.get(c, False))
+
+            except Exception as e_hs:
+                log.warning(f"researcher-drill HubSpot phone fetch failed: {e_hs}")
+
         # Build response rows
         rows = []
         for d in sorted(unique, key=lambda x: (x.get("company_name") or "").lower()):
-            tier  = _effective_icp_tier(d)
-            note  = _icp_score_note(d)
+            tier    = _effective_icp_tier(d)
+            note    = _icp_score_note(d)
+            cid_str = str(d.get("company_id") or "")
+            phone_c = phone_counts.get(cid_str, None)
             rows.append({
-                "company":  d.get("company_name") or "—",
-                "industry": d.get("industry")     or "—",
-                "tier":     tier,
-                "note":     note,
-                "date":     (d.get("deal_created") or "")[:10],
+                "company":    d.get("company_name") or "—",
+                "industry":   d.get("industry")     or "—",
+                "tier":       tier,
+                "note":       note,
+                "date":       (d.get("deal_created") or "")[:10],
+                "phone_count": phone_c,          # int or None
+                "no_mobile":  bool(d.get("is_no_mobile")),
             })
 
         ab  = sum(1 for r in rows if r["tier"] in ("A", "B"))
         pct = round(ab / len(rows) * 100) if rows else 0
+        total_with_phone = sum(1 for r in rows if (r["phone_count"] or 0) > 0)
 
         return jsonify({"ok": True, "data": {
-            "date":    iso_date or week_key,
-            "total":   len(rows),
-            "icp_ab":  ab,
-            "icp_pct": pct,
-            "rows":    rows,
+            "date":             iso_date or week_key,
+            "total":            len(rows),
+            "icp_ab":           ab,
+            "icp_pct":          pct,
+            "total_with_phone": total_with_phone,
+            "rows":             rows,
         }})
     except Exception as e:
         log.error(f"researcher-drill error: {e}", exc_info=True)

@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.10.0"
+APP_VERSION = "v2.11.0"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -889,7 +889,9 @@ def _aggregate_sdr_calls_by_date(agg_rows: list) -> dict:
         by_date.setdefault(iso, {})[sdr] = {
             "dials":          dials,
             "connects":       connects,
+            "hs_connects":    hs_conn,
             "connect_pct":    round(connects / dials * 100) if dials else 0,
+            "hs_connect_pct": round(hs_conn / dials * 100) if dials else 0,
             "said_intro":     int(r.get("said_intro") or 0),
             "had_convo":      int(r.get("had_convo") or 0),
             "asked_meeting":  int(r.get("asked_meeting") or 0),
@@ -1103,10 +1105,13 @@ def _fetch_sdr_activity():
         total_dials_sheet  = sum(r["dials_sheet"] for r in mine)
         connect_pct        = round(total_connects_hs / total_dials_hs * 100) if total_dials_hs else 0
         icp_ab_pct         = round(total_ab / total_companies * 100) if total_companies else 0
+        hs_only_pct        = round(total_hs_only / total_dials_hs * 100) if total_dials_hs else 0
         sdr_kpis[sdr_name] = {
             "dials_hs":        total_dials_hs,
             "connects_hs":     total_connects_hs,
+            "hs_connects":     total_hs_only,
             "connect_pct":     connect_pct,
+            "hs_connect_pct":  hs_only_pct,
             "said_intro":      total_intro,
             "had_convo":       total_convo,
             "asked_meeting":   total_asked,

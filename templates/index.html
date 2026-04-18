@@ -554,10 +554,11 @@
     <!-- ════════════════════════════════════════════
          PAGE: CANDIDATE AUDIT
     ════════════════════════════════════════════ -->
+    {% if is_paul %}
     <div class="page" id="page-candidates">
       <div class="page-header">
         <div>
-          <div class="page-eyebrow">HR · NocoDB · Employee Nirvana</div>
+          <div class="page-eyebrow">HR · NocoDB · Employee Nirvana · Owner-only</div>
           <h1 class="page-title">Candidate Audit</h1>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -698,14 +699,25 @@ const apiUrl = (path, force) => {
 // ── Navigation ──────────────────────────────────────────────────────────────
 const loaded = {};
 
-function showPage(name) {
+function showPage(name, ev) {
+  const page = document.getElementById('page-' + name);
+  if (!page) return;  // page not rendered (e.g. owner-only hidden for non-paul)
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.getElementById('page-' + name).classList.add('active');
-  event.currentTarget.classList.add('active');
+  page.classList.add('active');
+  const target = (ev && ev.currentTarget) || (typeof event !== 'undefined' ? event.currentTarget : null);
+  if (target && target.classList) target.classList.add('active');
   if (!loaded[name]) loadPage(name);
   closeSidebar();   // auto-close on mobile after nav
 }
+
+// Deep-link support: /?paul=XXX#candidates opens Candidate Audit on load
+document.addEventListener('DOMContentLoaded', function() {
+  const hash = (window.location.hash || '').replace(/^#/, '');
+  if (hash && document.getElementById('page-' + hash)) {
+    setTimeout(() => showPage(hash), 150);
+  }
+});
 
 function toggleSidebar() {
   const sidebar  = document.getElementById('main-sidebar');
@@ -982,13 +994,14 @@ function _applySDRFilter() {
   for (const r of filteredMerged) {
     const s = r.sdr;
     if (!kpis[s]) kpis[s] = {
-      dials_hs:0, connects_hs:0, said_intro:0, had_convo:0,
+      dials_hs:0, connects_hs:0, hs_connects:0, said_intro:0, had_convo:0,
       asked_meeting:0, booked_meeting:0, icp_ab:0, unique_companies:0,
       dials_sheet:0, days:0
     };
     const k = kpis[s];
     k.dials_hs         += r.dials_hs         || 0;
     k.connects_hs      += r.connects_hs      || 0;
+    k.hs_connects      += r.hs_connects      || 0;
     k.said_intro       += r.said_intro       || 0;
     k.had_convo        += r.had_convo        || 0;
     k.asked_meeting    += r.asked_meeting    || 0;

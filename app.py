@@ -44,6 +44,7 @@ NOCO_TOKEN          = os.getenv("NOCODB_TOKEN", "")
 NOCO_PROJECT_ID     = os.getenv("NOCODB_PROJECT_ID", "pmnqbv38yudws3v")
 NOCO_DEALS_TABLE    = os.getenv("NOCODB_DEALS_TABLE_ID", "migi5lc0fb9zhie")
 NOCO_SDR_CALLS_TBL  = os.getenv("NOCODB_SDR_CALLS_TBL",   "mrhbubrruqt6mxi")
+NOCO_SDR_DAILY_AGG  = os.getenv("NOCODB_SDR_DAILY_AGG",   "mb6u0m9d0q0y08q")
 # Candidate audit — Employee Nirvana base
 NOCO_HR_BASE_ID     = os.getenv("NOCODB_HR_BASE_ID",    "ptha3v85jd54lva")
 NOCO_CANDIDATES_TBL = os.getenv("NOCODB_CANDIDATES_TBL","mhgfkpd0xwc51ca")
@@ -734,61 +735,18 @@ def _fetch_researcher_activity():
         "updated_at":      datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
 
-# ── Data: SDR calls from NocoDB sdr_calls (HubSpot-sourced) ──────────────────
+# ── Data: SDR calls from NocoDB (HubSpot-sourced, pre-aggregated) ────────────
 
-# Two tiers: lightweight aggregates (for dashboard), full rows (for drill-down)
-
-@_cached("sdr_calls_agg", ttl=1800)
-def _fetch_sdr_calls_agg() -> list:
-    """Lightweight parallel fetch — only fields needed for dashboard aggregation."""
-    from concurrent.futures import ThreadPoolExecutor
-
-    fields = ("sdr,call_date,outcome,said_intro,had_convo,asked_meeting,"
-              "booked_meeting,company_id,icp_tier")
-
-    # First page to discover totalRows
-    r0 = requests.get(
-        f"{NOCO_BASE_URL}/api/v1/db/data/noco/{NOCO_PROJECT_ID}/{NOCO_SDR_CALLS_TBL}",
-        headers=_noco_headers(), params={"limit": 100, "offset": 0, "fields": fields},
+@_cached("sdr_daily_agg", ttl=1800)
+def _fetch_sdr_daily_agg() -> list:
+    """Fetch the pre-aggregated daily summary (~128 rows) — fast & cheap.
+    Populated by `alfred/tools/sync_sdr_calls.py rebuild_daily_agg()`."""
+    return _noco_get_all(
+        NOCO_SDR_DAILY_AGG,
+        fields=("iso_date,sdr,week_key,dials,connects,said_intro,had_convo,"
+                "asked_meeting,booked_meeting,unique_companies,"
+                "icp_a,icp_b,icp_c,icp_x,updated_at"),
     )
-    r0.raise_for_status()
-    d0 = r0.json()
-    rows = list(d0.get("list", []))
-    total = (d0.get("pageInfo") or {}).get("totalRows") or 0
-    if total <= 100:
-        return rows
-
-    offsets = list(range(100, total, 100))
-
-    def _fetch_page(offset: int) -> list:
-        for attempt in range(5):
-            try:
-                r = requests.get(
-                    f"{NOCO_BASE_URL}/api/v1/db/data/noco/{NOCO_PROJECT_ID}/{NOCO_SDR_CALLS_TBL}",
-                    headers=_noco_headers(),
-                    params={"limit": 100, "offset": offset, "fields": fields},
-                    timeout=15,
-                )
-                if r.status_code == 429:
-                    wait = 0.5 * (2 ** attempt) + (offset % 5) * 0.1
-                    time.sleep(wait)
-                    continue
-                if r.status_code in (400, 422): return []
-                r.raise_for_status()
-                return r.json().get("list", [])
-            except requests.exceptions.RequestException as e:
-                if attempt < 4:
-                    time.sleep(0.5 * (2 ** attempt))
-                    continue
-                log.warning(f"sdr_calls page offset={offset} failed: {e}")
-                return []
-        log.warning(f"sdr_calls page offset={offset} gave up after retries")
-        return []
-
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        for batch in ex.map(_fetch_page, offsets):
-            rows.extend(batch)
-    return rows
 
 
 @_cached("sdr_calls_by_date", ttl=900)
@@ -807,73 +765,38 @@ def _fetch_sdr_calls_by_date(iso_date: str, sdr_filter: str = "all") -> list:
     )
 
 
-def _fetch_sdr_calls_all():
-    """Back-compat alias — use _fetch_sdr_calls_agg for dashboard-level fetches."""
-    return _fetch_sdr_calls_agg()
-
-
-def _aggregate_sdr_calls_by_date(rows: list) -> dict:
+def _aggregate_sdr_calls_by_date(agg_rows: list) -> dict:
     """
-    Returns { iso_date: { sdr: { dials, connects, said_intro, had_convo,
-                                 asked_meeting, booked_meeting,
-                                 icp_a, icp_b, icp_c, icp_x, icp_ab, icp_ab_pct } } }
-    Dedup by company_id within a single (sdr, date) for the ICP quality numbers
-    so a repeat dial doesn't inflate the "Tier A companies reached" count.
+    Convert rows from `sdr_daily_agg` table into
+      { iso_date: { sdr: { dials, connects, connect_pct, said_intro, ..., icp_ab_pct } } }
     """
     by_date: dict = {}
-    for r in rows:
-        sdr = (r.get("sdr") or "").strip()
-        if not sdr: continue
-        iso = (r.get("call_date") or "")[:10]
-        if not iso: continue
-        slot = by_date.setdefault(iso, {}).setdefault(sdr, {
-            "dials": 0, "connects": 0,
-            "said_intro": 0, "had_convo": 0,
-            "asked_meeting": 0, "booked_meeting": 0,
-            "companies": set(),
-            "company_tiers": {},   # company_id -> tier (first seen that day)
-        })
-        slot["dials"] += 1
-        if r.get("outcome") in ("connected", "booked"):
-            slot["connects"] += 1
-        if r.get("said_intro"):     slot["said_intro"]     += 1
-        if r.get("had_convo"):      slot["had_convo"]      += 1
-        if r.get("asked_meeting"):  slot["asked_meeting"]  += 1
-        if r.get("booked_meeting"): slot["booked_meeting"] += 1
-        cid = str(r.get("company_id") or "").strip()
-        if cid:
-            slot["companies"].add(cid)
-            if cid not in slot["company_tiers"]:
-                slot["company_tiers"][cid] = (r.get("icp_tier") or "").strip().upper()
-
-    result: dict = {}
-    for iso, sdrs in by_date.items():
-        result[iso] = {}
-        for sdr, slot in sdrs.items():
-            tier_counts = {"A": 0, "B": 0, "C": 0, "X": 0}
-            for tier in slot["company_tiers"].values():
-                if tier in tier_counts: tier_counts[tier] += 1
-            total_co = sum(tier_counts.values())
-            ab = tier_counts["A"] + tier_counts["B"]
-            ab_pct = round(ab / total_co * 100) if total_co else 0
-            connect_pct = round(slot["connects"] / slot["dials"] * 100) if slot["dials"] else 0
-            result[iso][sdr] = {
-                "dials":          slot["dials"],
-                "connects":       slot["connects"],
-                "connect_pct":    connect_pct,
-                "said_intro":     slot["said_intro"],
-                "had_convo":      slot["had_convo"],
-                "asked_meeting":  slot["asked_meeting"],
-                "booked_meeting": slot["booked_meeting"],
-                "unique_companies": total_co,
-                "icp_a":     tier_counts["A"],
-                "icp_b":     tier_counts["B"],
-                "icp_c":     tier_counts["C"],
-                "icp_x":     tier_counts["X"],
-                "icp_ab":    ab,
-                "icp_ab_pct": ab_pct,
-            }
-    return result
+    for r in agg_rows:
+        sdr = (r.get("sdr") or "").strip().title()
+        iso = (r.get("iso_date") or "")[:10]
+        if not sdr or not iso: continue
+        dials    = int(r.get("dials") or 0)
+        connects = int(r.get("connects") or 0)
+        a = int(r.get("icp_a") or 0)
+        b = int(r.get("icp_b") or 0)
+        c = int(r.get("icp_c") or 0)
+        x = int(r.get("icp_x") or 0)
+        total_co = int(r.get("unique_companies") or 0) or (a + b + c + x)
+        ab = a + b
+        by_date.setdefault(iso, {})[sdr] = {
+            "dials":          dials,
+            "connects":       connects,
+            "connect_pct":    round(connects / dials * 100) if dials else 0,
+            "said_intro":     int(r.get("said_intro") or 0),
+            "had_convo":      int(r.get("had_convo") or 0),
+            "asked_meeting":  int(r.get("asked_meeting") or 0),
+            "booked_meeting": int(r.get("booked_meeting") or 0),
+            "unique_companies": total_co,
+            "icp_a":     a, "icp_b": b, "icp_c": c, "icp_x": x,
+            "icp_ab":    ab,
+            "icp_ab_pct": round(ab / total_co * 100) if total_co else 0,
+        }
+    return by_date
 
 
 # ── Data: SDR Review (NocoDB for pipeline, Sheets for call activity) ──────────
@@ -985,14 +908,14 @@ def _fetch_sdr_activity():
             "demos":    n(row, 4),
         })
 
-    # ── HubSpot-sourced call data (new) ───────────────────────────────────────
+    # ── HubSpot-sourced call data (from pre-aggregated summary table) ─────────
     try:
-        hs_rows = _fetch_sdr_calls_all()
+        agg_rows = _fetch_sdr_daily_agg()
     except Exception as e:
-        log.warning(f"Could not fetch sdr_calls: {e}")
-        hs_rows = []
+        log.warning(f"Could not fetch sdr_daily_agg: {e}")
+        agg_rows = []
 
-    hs_by_date = _aggregate_sdr_calls_by_date(hs_rows)
+    hs_by_date = _aggregate_sdr_calls_by_date(agg_rows)
 
     # Flatten hs_by_date into all_hs_rows (one row per sdr per date)
     # Normalize sdr name to Title Case so HubSpot "Tim"/"Jay" matches Kyle's "TIM"/"JAY"
@@ -1815,35 +1738,6 @@ def index():
 @app.route("/health")
 def health():
     return jsonify({"ok": True, "version": APP_VERSION})
-
-# ── Background cache warmer (pre-populate slow caches at startup) ────────────
-
-def _warm_cache_background():
-    """Pre-fetch slow endpoints so the first user request hits a warm cache.
-    Runs in a daemon thread on app startup."""
-    import threading, time as _t
-    def _worker():
-        _t.sleep(5)
-        try:
-            log.info("🔥 Warming sdr_calls cache...")
-            t0 = _t.time()
-            rows = _fetch_sdr_calls_agg()
-            log.info(f"   ✅ sdr_calls_agg: {len(rows)} rows in {_t.time()-t0:.1f}s")
-        except Exception as e:
-            log.warning(f"   ⚠️ sdr_calls warmer failed: {e}")
-
-        try:
-            log.info("🔥 Warming sdr_activity cache...")
-            t0 = _t.time()
-            _fetch_sdr_activity()
-            log.info(f"   ✅ sdr_activity warm in {_t.time()-t0:.1f}s")
-        except Exception as e:
-            log.warning(f"   ⚠️ sdr_activity warmer failed: {e}")
-
-    threading.Thread(target=_worker, daemon=True, name="cache-warmer").start()
-
-_warm_cache_background()
-
 
 if __name__ == "__main__":
     app.run(debug=True, port=int(os.getenv("PORT", 5000)))

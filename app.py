@@ -736,16 +736,37 @@ def _fetch_researcher_activity():
 
 # ── Data: SDR calls from NocoDB sdr_calls (HubSpot-sourced) ──────────────────
 
-@_cached("sdr_calls_raw", ttl=900)
-def _fetch_sdr_calls_all() -> list:
-    """Pull every row from the sdr_calls table."""
+# Two tiers: lightweight aggregates (for dashboard), full rows (for drill-down)
+
+@_cached("sdr_calls_agg", ttl=1800)
+def _fetch_sdr_calls_agg() -> list:
+    """Lightweight fetch — only fields needed for dashboard aggregation."""
     return _noco_get_all(
         NOCO_SDR_CALLS_TBL,
-        fields=("Id,call_id,sdr,owner_id,call_date,call_timestamp,direction,source,"
-                "duration_ms,outcome,said_intro,had_convo,asked_meeting,booked_meeting,"
-                "contact_name,contact_phone,contact_mobile,company_id,company_name,"
-                "company_domain,company_industry,icp_tier,icp_score_note,icp_source"),
+        fields=("sdr,call_date,outcome,said_intro,had_convo,asked_meeting,"
+                "booked_meeting,company_id,icp_tier"),
     )
+
+
+@_cached("sdr_calls_by_date", ttl=900)
+def _fetch_sdr_calls_by_date(iso_date: str, sdr_filter: str = "all") -> list:
+    """Targeted fetch for drill-down — one date, one sdr (or all)."""
+    where = f"(call_date,eq,{iso_date})"
+    if sdr_filter.lower() != "all":
+        where += f"~and(sdr,eq,{sdr_filter.capitalize()})"
+    return _noco_get_all(
+        NOCO_SDR_CALLS_TBL, where=where,
+        fields=("call_id,sdr,call_date,call_timestamp,outcome,duration_ms,"
+                "said_intro,had_convo,asked_meeting,booked_meeting,"
+                "contact_name,contact_phone,contact_mobile,"
+                "company_id,company_name,company_domain,company_industry,"
+                "icp_tier,icp_score_note,icp_source"),
+    )
+
+
+def _fetch_sdr_calls_all():
+    """Back-compat alias — use _fetch_sdr_calls_agg for dashboard-level fetches."""
+    return _fetch_sdr_calls_agg()
 
 
 def _aggregate_sdr_calls_by_date(rows: list) -> dict:
@@ -1608,16 +1629,7 @@ def api_sdr_drill():
         return jsonify({"ok": False, "error": "date=YYYY-MM-DD required"}), 400
 
     try:
-        rows = _fetch_sdr_calls_all()
-
-        # Filter to that date (and optional SDR)
-        matched = []
-        for r in rows:
-            dc = (r.get("call_date") or "")[:10]
-            if dc != iso_date: continue
-            if sdr_filter != "all" and (r.get("sdr") or "").lower() != sdr_filter:
-                continue
-            matched.append(r)
+        matched = _fetch_sdr_calls_by_date(iso_date, sdr_filter)
 
         # Group by (sdr, company_id or name) and aggregate
         group_key_to_entry: dict = {}

@@ -1097,6 +1097,7 @@ def _fetch_sdr_activity():
         if not mine: continue
         total_dials_hs     = sum(r["dials_hs"] for r in mine)
         total_connects_hs  = sum(r["connects_hs"] for r in mine)
+        total_hs_only      = sum(r.get("hs_connects", 0) for r in mine)
         total_booked       = sum(r["booked_meeting"] for r in mine)
         total_intro        = sum(r["said_intro"] for r in mine)
         total_convo        = sum(r["had_convo"] for r in mine)

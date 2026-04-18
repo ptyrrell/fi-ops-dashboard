@@ -1802,6 +1802,7 @@ def api_sdr_drill():
                     "tier":           (e.get("icp_tier") or "").upper() or "?",
                     "icp_note":       e.get("icp_note", ""),
                     "calls":          0,
+                    "connects":       0,
                     "duration_ms":    0,
                     "phone":          e.get("contact_phone", ""),
                     "contact":        e.get("contact_name", ""),
@@ -1811,6 +1812,7 @@ def api_sdr_drill():
                     "reached_stage":  _STAGE_MAP.get(e.get("stage_reached", "dial"), "no_contact"),
                 })
                 m["calls"]       += int(e.get("calls", 0))
+                m["connects"]    += int(e.get("connects", 0))
                 m["duration_ms"] += int(e.get("duration_ms", 0))
 
         tier_order  = {"A":0, "B":1, "C":2, "X":3, "?":4}

@@ -1749,7 +1749,7 @@ function _renderSdrDrillBody() {
       <th>Contact · Phone</th>
     </tr></thead><tbody>`;
   if (!filtered.length) {
-    html += `<tr><td colspan="8" style="text-align:center;color:#6b7280;padding:32px">No companies in this tier</td></tr>`;
+    html += `<tr><td colspan="9" style="text-align:center;color:#6b7280;padding:32px">No companies in this tier</td></tr>`;
   } else {
     for (const c of filtered) {
       const tierEmoji = {A:'🟢',B:'🟡',C:'⚪',X:'🔴','?':'—'}[c.tier] || '—';
@@ -1769,6 +1769,7 @@ function _renderSdrDrillBody() {
         <td style="color:#d1d5db">${c.industry||'—'}</td>
         <td style="text-align:center;color:${tierColor};font-weight:700">${tierEmoji} ${c.tier}</td>
         <td style="text-align:right;color:#ffffff;font-weight:600">${c.calls}</td>
+        <td style="text-align:right;color:${(c.connects||0)>0?'#4ade80':'#6b7280'};font-weight:600">${c.connects||0}</td>
         <td style="color:#cbd5e1">${stageLabel[c.reached_stage]||'—'}</td>
         <td style="color:#9ca3af;font-size:12px">${c.last_outcome||'—'}</td>
         <td>${contactLine}${phoneBits}</td>

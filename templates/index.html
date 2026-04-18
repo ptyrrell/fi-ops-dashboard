@@ -388,7 +388,7 @@
     </div>
 
     <div class="sidebar-footer">
-      Built by Alfred · FI-OPS v2.9.2<br>
+      Built by Alfred · FI-OPS {{ app_version }}<br>
       Data: HubSpot + Sheets
     </div>
   </nav>
@@ -1021,11 +1021,67 @@ function renderPage(name, data) {
   if (fn) fn(data);
 }
 
+function _healthRing(pct, band) {
+  const circ = 2 * Math.PI * 28;
+  const offset = circ - (Math.max(0, Math.min(100, pct)) / 100) * circ;
+  const color = band === 'good' ? '#10b981' : band === 'warn' ? '#f59e0b' : '#ef4444';
+  return `
+    <svg width="72" height="72" viewBox="0 0 72 72" style="transform:rotate(-90deg)">
+      <circle cx="36" cy="36" r="28" fill="none" stroke="#1f2937" stroke-width="7"/>
+      <circle cx="36" cy="36" r="28" fill="none" stroke="${color}" stroke-width="7"
+              stroke-dasharray="${circ}" stroke-dashoffset="${offset}"
+              stroke-linecap="round"/>
+    </svg>`;
+}
+
+function _renderOpsHealth(oh) {
+  if (!oh) return '';
+  const pillars = [
+    {key:'research',   icon:'🔬'},
+    {key:'sdr',        icon:'📞'},
+    {key:'ae',         icon:'🏆'},
+    {key:'onboarding', icon:'🚀'},
+  ];
+  let html = `
+  <div class="card" style="margin-bottom:20px">
+    <div class="card-header">
+      <div>
+        <div class="card-title">🩺 Operational Health</div>
+        <div class="card-subtitle">Four-pillar pipeline health · Research → SDR → AE → Onboarding</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;padding:4px">`;
+  for (const p of pillars) {
+    const d = oh[p.key] || {};
+    const band = d.band || 'bad';
+    const tone = band==='good' ? '#10b981' : band==='warn' ? '#f59e0b' : '#ef4444';
+    html += `
+      <div style="background:#0b1220;border:1px solid #1e293b;border-radius:10px;padding:14px;
+                  display:grid;grid-template-columns:72px 1fr;gap:14px;align-items:center;color:#e5e7eb">
+        <div style="position:relative">
+          ${_healthRing(d.score || 0, band)}
+          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+                      font-weight:700;font-size:16px;color:${tone}">${d.value || '—'}</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:#94a3b8;letter-spacing:.4px;text-transform:uppercase">
+            ${p.icon} ${d.label || p.key}
+          </div>
+          <div style="font-size:14px;font-weight:600;margin-top:2px;color:#f1f5f9">${d.metric || ''}</div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:4px">${d.detail || ''}</div>
+          <div style="font-size:11px;color:${tone};margin-top:3px">${d.sub || ''}</div>
+        </div>
+      </div>`;
+  }
+  html += `</div></div>`;
+  return html;
+}
+
 function renderPipeline(data) {
   const s = data.summary;
   const noMobCls = pctClass(100 - s.no_mobile_pct, 80, 60);
 
-  let html = `
+  let html = _renderOpsHealth(data.ops_health) + `
   <div class="kpi-grid">
     <div class="kpi blue"><div class="kpi-label">Total Deals</div><div class="kpi-value">${s.total.toLocaleString()}</div><div class="kpi-sub">Tim + Jay pipelines</div></div>
     <div class="kpi teal"><div class="kpi-label">Active</div><div class="kpi-value">${s.active.toLocaleString()}</div><div class="kpi-sub">${Math.round(s.active/s.total*100)}% of pipeline</div></div>

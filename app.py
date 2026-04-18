@@ -1763,9 +1763,16 @@ def api_upload_resume():
 
 @app.route("/")
 def index():
+    # paul flag is verified server-side on API calls; we also pass a boolean
+    # to the template so we can hide owner-only nav entries for non-owners.
+    paul_arg = request.args.get("paul", "")
+    is_paul  = bool(PAUL_SECRET) and paul_arg == PAUL_SECRET
     return render_template(
         "index.html",
         dashboard_secret=DASHBOARD_SECRET,
+        paul_secret=(paul_arg if is_paul else ""),
+        is_paul=is_paul,
+        paul_required=bool(PAUL_SECRET),
         app_version=APP_VERSION,
     )
 

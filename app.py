@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.9.1"
+APP_VERSION = "v2.9.2"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -746,7 +746,7 @@ def _fetch_sdr_daily_agg() -> list:
         NOCO_SDR_DAILY_AGG,
         fields=("iso_date,sdr,week_key,dials,connects,said_intro,had_convo,"
                 "asked_meeting,booked_meeting,unique_companies,"
-                "icp_a,icp_b,icp_c,icp_x,updated_at"),
+                "icp_a,icp_b,icp_c,icp_x,updated_at,drill_json"),
     )
 
 
@@ -1640,77 +1640,70 @@ def api_sdr_drill():
         return jsonify({"ok": False, "error": "date=YYYY-MM-DD required"}), 400
 
     try:
-        matched = _fetch_sdr_calls_by_date(iso_date, sdr_filter)
+        agg_rows = _fetch_sdr_daily_agg()
+        _STAGE_MAP = {"dial": "no_contact", "said_intro": "intro",
+                      "had_convo": "convo", "asked_meeting": "asked",
+                      "booked_meeting": "booked"}
+        want_sdrs = None
+        if sdr_filter != "all":
+            want_sdrs = {sdr_filter.title()}
 
-        # Group by (sdr, company_id or name) and aggregate
-        group_key_to_entry: dict = {}
-        for r in matched:
-            cid   = str(r.get("company_id") or "").strip()
-            cname = (r.get("company_name") or "").strip()
-            sdr   = r.get("sdr") or ""
-            gkey  = (sdr, cid or cname.lower() or r.get("call_id",""))
-            entry = group_key_to_entry.get(gkey)
-            if not entry:
-                entry = {
+        # Merge drill rows from matching daily_agg rows (one per sdr)
+        merged: dict = {}
+        for row in agg_rows:
+            if (row.get("iso_date") or "")[:10] != iso_date:
+                continue
+            sdr = (row.get("sdr") or "").strip().title()
+            if want_sdrs and sdr not in want_sdrs:
+                continue
+            blob = row.get("drill_json") or "[]"
+            try:
+                entries = json.loads(blob) if isinstance(blob, str) else blob
+            except Exception:
+                entries = []
+            for e in entries:
+                gkey = (sdr, e.get("company_id") or e.get("company_name") or "")
+                m = merged.setdefault(gkey, {
                     "sdr":            sdr,
-                    "company_id":     cid,
-                    "company_name":   cname or "(no company)",
-                    "company_domain": r.get("company_domain", ""),
-                    "industry":       r.get("company_industry", ""),
-                    "tier":           (r.get("icp_tier") or "").upper() or "?",
-                    "icp_note":       r.get("icp_score_note", ""),
-                    "icp_source":     r.get("icp_source", ""),
+                    "company_id":     e.get("company_id", ""),
+                    "company_name":   e.get("company_name") or "(no company)",
+                    "company_domain": e.get("domain", ""),
+                    "industry":       e.get("industry", ""),
+                    "icp_tier":       (e.get("icp_tier") or "").upper() or "?",
+                    "tier":           (e.get("icp_tier") or "").upper() or "?",
+                    "icp_note":       e.get("icp_note", ""),
                     "calls":          0,
-                    "last_ts":        "",
-                    "last_outcome":   "",
-                    "phone":          r.get("contact_phone") or r.get("contact_mobile") or "",
-                    "contact":        r.get("contact_name", ""),
-                    "reached_stage":  "",  # highest funnel stage reached
-                    "said_intro":     False,
-                    "had_convo":      False,
-                    "asked_meeting":  False,
-                    "booked_meeting": False,
-                }
-                group_key_to_entry[gkey] = entry
-            entry["calls"] += 1
-            ts = r.get("call_timestamp", "")
-            if ts > entry["last_ts"]:
-                entry["last_ts"]      = ts
-                entry["last_outcome"] = r.get("outcome", "")
-            for f in ("said_intro","had_convo","asked_meeting","booked_meeting"):
-                if r.get(f):
-                    entry[f] = True
+                    "duration_ms":    0,
+                    "phone":          e.get("contact_phone", ""),
+                    "contact":        e.get("contact_name", ""),
+                    "last_outcome":   e.get("last_outcome", ""),
+                    "last_ts":        e.get("last_ts", ""),
+                    "stage_reached":  e.get("stage_reached", "dial"),
+                    "reached_stage":  _STAGE_MAP.get(e.get("stage_reached", "dial"), "no_contact"),
+                })
+                m["calls"]       += int(e.get("calls", 0))
+                m["duration_ms"] += int(e.get("duration_ms", 0))
 
-        # Compute the highest funnel stage for each company
-        for e in group_key_to_entry.values():
-            if   e["booked_meeting"]: e["reached_stage"] = "booked"
-            elif e["asked_meeting"]:  e["reached_stage"] = "asked"
-            elif e["had_convo"]:      e["reached_stage"] = "convo"
-            elif e["said_intro"]:     e["reached_stage"] = "intro"
-            else:                     e["reached_stage"] = "no_contact"
-
-        # Sort by tier (A→X) then calls desc
-        tier_order = {"A":0,"B":1,"C":2,"X":3,"?":4}
-        companies = sorted(group_key_to_entry.values(),
-                           key=lambda e: (tier_order.get(e["tier"], 5), -e["calls"]))
-
+        tier_order  = {"A":0, "B":1, "C":2, "X":3, "?":4}
+        companies   = sorted(merged.values(),
+                             key=lambda c: (tier_order.get(c["tier"], 5), -c["calls"]))
         tier_counts = {"A":0,"B":0,"C":0,"X":0,"?":0}
-        for e in companies:
-            tier_counts[e["tier"] if e["tier"] in tier_counts else "?"] += 1
-
-        total_calls = sum(e["calls"] for e in companies)
-        ab = tier_counts["A"] + tier_counts["B"]
+        for c in companies:
+            key = c["tier"] if c["tier"] in tier_counts else "?"
+            tier_counts[key] += 1
+        total_calls = sum(c["calls"] for c in companies)
+        ab     = tier_counts["A"] + tier_counts["B"]
         ab_pct = round(ab / len(companies) * 100) if companies else 0
 
         return jsonify({"ok": True, "data": {
-            "date":        iso_date,
-            "sdr_filter":  sdr_filter,
-            "total_calls": total_calls,
+            "date":            iso_date,
+            "sdr_filter":      sdr_filter,
+            "total_calls":     total_calls,
             "total_companies": len(companies),
-            "tier_counts": tier_counts,
-            "icp_ab":      ab,
-            "icp_ab_pct":  ab_pct,
-            "companies":   companies,
+            "tier_counts":     tier_counts,
+            "icp_ab":          ab,
+            "icp_ab_pct":      ab_pct,
+            "companies":       companies,
         }})
     except Exception as e:
         log.error(f"sdr-drill error: {e}", exc_info=True)

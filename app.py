@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.11.0"
+APP_VERSION = "v2.10.0"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -880,6 +880,7 @@ def _aggregate_sdr_calls_by_date(agg_rows: list) -> dict:
         if not sdr or not iso: continue
         dials    = int(r.get("dials") or 0)
         connects = int(r.get("connects") or 0)
+        hs_conn  = int(r.get("hs_connects") or 0)
         a = int(r.get("icp_a") or 0)
         b = int(r.get("icp_b") or 0)
         c = int(r.get("icp_c") or 0)

@@ -1816,5 +1816,34 @@ def index():
 def health():
     return jsonify({"ok": True, "version": APP_VERSION})
 
+# ── Background cache warmer (pre-populate slow caches at startup) ────────────
+
+def _warm_cache_background():
+    """Pre-fetch slow endpoints so the first user request hits a warm cache.
+    Runs in a daemon thread on app startup."""
+    import threading, time as _t
+    def _worker():
+        _t.sleep(5)
+        try:
+            log.info("🔥 Warming sdr_calls cache...")
+            t0 = _t.time()
+            rows = _fetch_sdr_calls_agg()
+            log.info(f"   ✅ sdr_calls_agg: {len(rows)} rows in {_t.time()-t0:.1f}s")
+        except Exception as e:
+            log.warning(f"   ⚠️ sdr_calls warmer failed: {e}")
+
+        try:
+            log.info("🔥 Warming sdr_activity cache...")
+            t0 = _t.time()
+            _fetch_sdr_activity()
+            log.info(f"   ✅ sdr_activity warm in {_t.time()-t0:.1f}s")
+        except Exception as e:
+            log.warning(f"   ⚠️ sdr_activity warmer failed: {e}")
+
+    threading.Thread(target=_worker, daemon=True, name="cache-warmer").start()
+
+_warm_cache_background()
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=int(os.getenv("PORT", 5000)))

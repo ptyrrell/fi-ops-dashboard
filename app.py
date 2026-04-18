@@ -740,12 +740,45 @@ def _fetch_researcher_activity():
 
 @_cached("sdr_calls_agg", ttl=1800)
 def _fetch_sdr_calls_agg() -> list:
-    """Lightweight fetch — only fields needed for dashboard aggregation."""
-    return _noco_get_all(
-        NOCO_SDR_CALLS_TBL,
-        fields=("sdr,call_date,outcome,said_intro,had_convo,asked_meeting,"
-                "booked_meeting,company_id,icp_tier"),
+    """Lightweight parallel fetch — only fields needed for dashboard aggregation."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    fields = ("sdr,call_date,outcome,said_intro,had_convo,asked_meeting,"
+              "booked_meeting,company_id,icp_tier")
+
+    # First page to discover totalRows
+    r0 = requests.get(
+        f"{NOCO_BASE_URL}/api/v1/db/data/noco/{NOCO_PROJECT_ID}/{NOCO_SDR_CALLS_TBL}",
+        headers=_noco_headers(), params={"limit": 100, "offset": 0, "fields": fields},
     )
+    r0.raise_for_status()
+    d0 = r0.json()
+    rows = list(d0.get("list", []))
+    total = (d0.get("pageInfo") or {}).get("totalRows") or 0
+    if total <= 100:
+        return rows
+
+    offsets = list(range(100, total, 100))
+
+    def _fetch_page(offset: int) -> list:
+        try:
+            r = requests.get(
+                f"{NOCO_BASE_URL}/api/v1/db/data/noco/{NOCO_PROJECT_ID}/{NOCO_SDR_CALLS_TBL}",
+                headers=_noco_headers(),
+                params={"limit": 100, "offset": offset, "fields": fields},
+                timeout=15,
+            )
+            if r.status_code in (400, 422): return []
+            r.raise_for_status()
+            return r.json().get("list", [])
+        except Exception as e:
+            log.warning(f"sdr_calls page offset={offset} failed: {e}")
+            return []
+
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        for batch in ex.map(_fetch_page, offsets):
+            rows.extend(batch)
+    return rows
 
 
 @_cached("sdr_calls_by_date", ttl=900)

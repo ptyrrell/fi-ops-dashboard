@@ -761,21 +761,31 @@ def _fetch_sdr_calls_agg() -> list:
     offsets = list(range(100, total, 100))
 
     def _fetch_page(offset: int) -> list:
-        try:
-            r = requests.get(
-                f"{NOCO_BASE_URL}/api/v1/db/data/noco/{NOCO_PROJECT_ID}/{NOCO_SDR_CALLS_TBL}",
-                headers=_noco_headers(),
-                params={"limit": 100, "offset": offset, "fields": fields},
-                timeout=15,
-            )
-            if r.status_code in (400, 422): return []
-            r.raise_for_status()
-            return r.json().get("list", [])
-        except Exception as e:
-            log.warning(f"sdr_calls page offset={offset} failed: {e}")
-            return []
+        for attempt in range(5):
+            try:
+                r = requests.get(
+                    f"{NOCO_BASE_URL}/api/v1/db/data/noco/{NOCO_PROJECT_ID}/{NOCO_SDR_CALLS_TBL}",
+                    headers=_noco_headers(),
+                    params={"limit": 100, "offset": offset, "fields": fields},
+                    timeout=15,
+                )
+                if r.status_code == 429:
+                    wait = 0.5 * (2 ** attempt) + (offset % 5) * 0.1
+                    time.sleep(wait)
+                    continue
+                if r.status_code in (400, 422): return []
+                r.raise_for_status()
+                return r.json().get("list", [])
+            except requests.exceptions.RequestException as e:
+                if attempt < 4:
+                    time.sleep(0.5 * (2 ** attempt))
+                    continue
+                log.warning(f"sdr_calls page offset={offset} failed: {e}")
+                return []
+        log.warning(f"sdr_calls page offset={offset} gave up after retries")
+        return []
 
-    with ThreadPoolExecutor(max_workers=12) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         for batch in ex.map(_fetch_page, offsets):
             rows.extend(batch)
     return rows
@@ -985,15 +995,19 @@ def _fetch_sdr_activity():
     hs_by_date = _aggregate_sdr_calls_by_date(hs_rows)
 
     # Flatten hs_by_date into all_hs_rows (one row per sdr per date)
+    # Normalize sdr name to Title Case so HubSpot "Tim"/"Jay" matches Kyle's "TIM"/"JAY"
     all_hs_rows = []
     for iso, sdrs in hs_by_date.items():
         for sdr, s in sdrs.items():
-            all_hs_rows.append({"iso_date": iso, "sdr": sdr, **s})
+            all_hs_rows.append({"iso_date": iso, "sdr": (sdr or "").title(), **s})
     all_hs_rows.sort(key=lambda r: (r["iso_date"], r["sdr"]), reverse=True)
 
     # Merged daily breakdown — one row per (sdr, date), combining HubSpot + sheet
     merged_rows = []
-    # Build kyle lookup: (sdr, iso_date) -> row
+    # Normalize kyle rep names to Title Case for merging
+    for kr in all_kyle_rows_export:
+        kr["rep"] = (kr.get("rep") or "").title()
+
     kyle_lookup = {}
     for kr in all_kyle_rows_export:
         if kr["iso_date"]:

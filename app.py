@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.9.2"
+APP_VERSION = "v2.10.0"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 HUBSPOT_API_KEY   = os.getenv("HUBSPOT_API_KEY", "")
 SALES_SHEET_ID    = os.getenv("SALES_SHEET_ID", "1qN420Yk7RFXUFLfmT9xecWGBYuM0TEhBSvBgi2kH_ng")
 DASHBOARD_SECRET  = os.getenv("DASHBOARD_SECRET", "")
+PAUL_SECRET       = os.getenv("PAUL_SECRET", "")   # gates owner-only pages (Candidate Audit)
 CACHE_TTL_SECS    = int(os.getenv("CACHE_TTL", "1800"))
 GOOGLE_SA_B64     = os.getenv("GOOGLE_SERVICE_ACCOUNT_B64", "")
 GOOGLE_SA_PATH    = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "")
@@ -491,6 +492,66 @@ def _fetch_pipeline_quality():
         else:
             non_icp_ind[ind_label] += 1
 
+
+    # ── Ops Health: 4-pillar summary ────────────────────────────────────────
+    icp_ab_cnt  = sum(1 for d in deals if _effective_icp_tier(d) in ("A","B"))
+    demo_booked = sum(1 for d in deals if d.get("is_demo_booked"))
+    won         = sum(1 for d in deals if d.get("is_won"))
+    no_mobile   = sum(1 for d in deals if d.get("is_no_mobile"))
+    try:
+        agg = _fetch_sdr_daily_agg()
+        total_dials = sum(int(r.get("dials",0) or 0) for r in agg)
+        total_conn  = sum(int(r.get("connects",0) or 0) for r in agg)
+        sdr_connect_pct = round(total_conn/total_dials*100) if total_dials else 0
+        total_intro = sum(int(r.get("said_intro",0) or 0) for r in agg)
+        sdr_funnel_pct = round(total_intro/total_conn*100) if total_conn else 0
+    except Exception:
+        sdr_connect_pct, sdr_funnel_pct = 0, 0
+        total_conn = total_dials = 0
+    try:
+        onb = _fetch_onboarding()
+        onb_active  = onb.get("summary",{}).get("active", 0)
+        onb_at_risk = onb.get("summary",{}).get("at_risk", 0)
+        onb_health_pct = round((onb_active-onb_at_risk)/onb_active*100) if onb_active else 0
+    except Exception:
+        onb_health_pct, onb_active, onb_at_risk = 0, 0, 0
+    def _band(v, good, warn):
+        if v >= good: return "good"
+        if v >= warn: return "warn"
+        return "bad"
+    research_icp_pct = round(icp_ab_cnt/total*100) if total else 0
+    ae_demo_to_won   = round(won/demo_booked*100) if demo_booked else 0
+    ops_health = {
+        "research": {
+            "label":"Research Quality","metric":"ICP A+B of researched leads",
+            "value":f"{research_icp_pct}%","score":research_icp_pct,
+            "detail":f"{icp_ab_cnt} of {total} total deals",
+            "band":_band(research_icp_pct, 60, 40),
+            "sub":f"{no_mobile} ({round(no_mobile/total*100) if total else 0}%) missing phone",
+        },
+        "sdr": {
+            "label":"SDR Quality","metric":"Connect rate · funnel progression",
+            "value":f"{sdr_connect_pct}%","score":sdr_connect_pct,
+            "detail":f"{total_conn:,} connects of {total_dials:,} dials",
+            "band":_band(sdr_connect_pct, 35, 20),
+            "sub":f"{sdr_funnel_pct}% of connects reached intro stage",
+        },
+        "ae": {
+            "label":"AE Conversion","metric":"Demo → Won",
+            "value":f"{ae_demo_to_won}%","score":ae_demo_to_won,
+            "detail":f"{won} wins from {demo_booked} demos booked",
+            "band":_band(ae_demo_to_won, 25, 10),
+            "sub":f"{active} active deals in pipeline",
+        },
+        "onboarding": {
+            "label":"Onboarding Health","metric":"Customers on track",
+            "value":f"{onb_health_pct}%","score":onb_health_pct,
+            "detail":f"{onb_active - onb_at_risk} of {onb_active} active",
+            "band":_band(onb_health_pct, 85, 65),
+            "sub":(f"{onb_at_risk} at-risk" if onb_at_risk else "No at-risk accounts"),
+        },
+    }
+
     return {
         "summary": {
             "total":         total,
@@ -503,6 +564,7 @@ def _fetch_pipeline_quality():
             "no_mobile_pct": round(sum(1 for d in deals if d.get("is_no_mobile"))/total*100) if total else 0,
             "last_hs_sync":  last_sync,
         },
+        "ops_health":    ops_health,
         "by_researcher": researcher_stats,
         "stage_counts":  dict(stage_counts.most_common(14)),
         "won_deals":     sorted(
@@ -1204,6 +1266,13 @@ def _require_key():
     if key != DASHBOARD_SECRET:
         abort(403)
 
+def _require_paul():
+    """Gate owner-only endpoints. Falls back to _require_key if PAUL_SECRET unset."""
+    _require_key()
+    if not PAUL_SECRET: return
+    paul = request.args.get("paul") or request.headers.get("X-Paul-Key","")
+    if paul != PAUL_SECRET: abort(403)
+
 @app.route("/api/pipeline-quality")
 def api_pipeline_quality():
     _require_key()
@@ -1324,6 +1393,66 @@ def _fetch_icp_audit():
     for c in company_list:
         if c["tier"] in ("A","B") and c["industry"]:
             ind_counter[c["industry"]] += 1
+
+
+    # ── Ops Health: 4-pillar summary ────────────────────────────────────────
+    icp_ab_cnt  = sum(1 for d in deals if _effective_icp_tier(d) in ("A","B"))
+    demo_booked = sum(1 for d in deals if d.get("is_demo_booked"))
+    won         = sum(1 for d in deals if d.get("is_won"))
+    no_mobile   = sum(1 for d in deals if d.get("is_no_mobile"))
+    try:
+        agg = _fetch_sdr_daily_agg()
+        total_dials = sum(int(r.get("dials",0) or 0) for r in agg)
+        total_conn  = sum(int(r.get("connects",0) or 0) for r in agg)
+        sdr_connect_pct = round(total_conn/total_dials*100) if total_dials else 0
+        total_intro = sum(int(r.get("said_intro",0) or 0) for r in agg)
+        sdr_funnel_pct = round(total_intro/total_conn*100) if total_conn else 0
+    except Exception:
+        sdr_connect_pct, sdr_funnel_pct = 0, 0
+        total_conn = total_dials = 0
+    try:
+        onb = _fetch_onboarding()
+        onb_active  = onb.get("summary",{}).get("active", 0)
+        onb_at_risk = onb.get("summary",{}).get("at_risk", 0)
+        onb_health_pct = round((onb_active-onb_at_risk)/onb_active*100) if onb_active else 0
+    except Exception:
+        onb_health_pct, onb_active, onb_at_risk = 0, 0, 0
+    def _band(v, good, warn):
+        if v >= good: return "good"
+        if v >= warn: return "warn"
+        return "bad"
+    research_icp_pct = round(icp_ab_cnt/total*100) if total else 0
+    ae_demo_to_won   = round(won/demo_booked*100) if demo_booked else 0
+    ops_health = {
+        "research": {
+            "label":"Research Quality","metric":"ICP A+B of researched leads",
+            "value":f"{research_icp_pct}%","score":research_icp_pct,
+            "detail":f"{icp_ab_cnt} of {total} total deals",
+            "band":_band(research_icp_pct, 60, 40),
+            "sub":f"{no_mobile} ({round(no_mobile/total*100) if total else 0}%) missing phone",
+        },
+        "sdr": {
+            "label":"SDR Quality","metric":"Connect rate · funnel progression",
+            "value":f"{sdr_connect_pct}%","score":sdr_connect_pct,
+            "detail":f"{total_conn:,} connects of {total_dials:,} dials",
+            "band":_band(sdr_connect_pct, 35, 20),
+            "sub":f"{sdr_funnel_pct}% of connects reached intro stage",
+        },
+        "ae": {
+            "label":"AE Conversion","metric":"Demo → Won",
+            "value":f"{ae_demo_to_won}%","score":ae_demo_to_won,
+            "detail":f"{won} wins from {demo_booked} demos booked",
+            "band":_band(ae_demo_to_won, 25, 10),
+            "sub":f"{active} active deals in pipeline",
+        },
+        "onboarding": {
+            "label":"Onboarding Health","metric":"Customers on track",
+            "value":f"{onb_health_pct}%","score":onb_health_pct,
+            "detail":f"{onb_active - onb_at_risk} of {onb_active} active",
+            "band":_band(onb_health_pct, 85, 65),
+            "sub":(f"{onb_at_risk} at-risk" if onb_at_risk else "No at-risk accounts"),
+        },
+    }
 
     return {
         "summary": {
@@ -1712,7 +1841,7 @@ def api_sdr_drill():
 
 @app.route("/api/candidates")
 def api_candidates():
-    _require_key()
+    _require_paul()
     try:
         candidates = _fetch_all_candidates()
         return jsonify({"ok": True, "data": {"candidates": candidates,
@@ -1725,7 +1854,7 @@ def api_candidates():
 
 @app.route("/api/upload-resume", methods=["POST"])
 def api_upload_resume():
-    _require_key()
+    _require_paul()
     if "file" not in request.files:
         return jsonify({"ok": False, "error": "No file uploaded"}), 400
     f        = request.files["file"]

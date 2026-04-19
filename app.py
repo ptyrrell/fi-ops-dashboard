@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.11.0"
+APP_VERSION = "v2.11.1"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)

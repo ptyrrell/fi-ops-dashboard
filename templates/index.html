@@ -1183,7 +1183,7 @@ function renderPipeline(data) {
             <td class="right mono">${r.won}</td>
             <td class="right pct-cell"><span class="pct-num ${pctClass(r.win_rate,5,2)}">${r.win_rate}%</span></td>
           </tr>
-          <tr id="${rowId}" style="display:none">
+          <tr id="${rowId}">
             <td colspan="8" style="padding:0">
               <div id="${rowId}-content" style="padding:12px 16px;background:rgba(15,23,42,.6);border-top:1px solid #1e2a3a"></div>
             </td>
@@ -1236,6 +1236,13 @@ function renderPipeline(data) {
 
   html += `</div></div>`;
   document.getElementById('pipeline-content').innerHTML = html;
+
+  // Auto-expand each researcher's industry breakdown (user requested default-open)
+  for (const r of (data.by_researcher || [])) {
+    const rowId = 'icp-drilldown-' + r.name.replace(/\s+/g,'_');
+    const c = document.getElementById(rowId + '-content');
+    if (c) _renderIcpDrilldown(c);
+  }
 }
 
 function toggleIcpDrilldown(rowId) {
@@ -1262,13 +1269,17 @@ function _renderIcpDrilldown(container) {
   function makeBar(entries, total, color) {
     return entries.map(([ind, cnt]) => {
       const pct = Math.round(cnt / total * 100);
+      const isUnknown = /unknown|not set|^\s*$/i.test(ind);
+      const label = isUnknown
+        ? `<span style="color:#fbbf24">⚠ ${ind}</span><span style="font-size:10px;color:#fbbf24;margin-left:6px">needs research</span>`
+        : ind;
       return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
-        <div style="width:160px;font-size:12px;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${ind}">${ind}</div>
+        <div style="width:200px;font-size:12px;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${ind}">${label}</div>
         <div style="flex:1;background:#1e2a3a;border-radius:3px;height:7px;overflow:hidden">
           <div style="width:${Math.min(pct*3,100)}%;height:100%;background:${color};border-radius:3px"></div>
         </div>
-        <div style="width:30px;text-align:right;font-size:11px;font-weight:700;color:${color}">${cnt}</div>
-        <div style="width:26px;text-align:right;font-size:11px;color:#64748b">${pct}%</div>
+        <div style="width:40px;text-align:right;font-size:11px;font-weight:700;color:${color}">${cnt}</div>
+        <div style="width:34px;text-align:right;font-size:11px;color:#cbd5e1">${pct}%</div>
       </div>`;
     }).join('');
   }
@@ -1282,10 +1293,10 @@ function _renderIcpDrilldown(container) {
         ${icpEntries.length ? makeBar(icpEntries, icpTotal, 'var(--green)') : '<div style="color:#64748b;font-size:12px">No ICP companies scored yet</div>'}
       </div>
       <div>
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#f87171;margin-bottom:10px">
           ❌ Non-ICP Industries (${nonIcpTotal} companies)
         </div>
-        ${nonIcpEntries.length ? makeBar(nonIcpEntries, nonIcpTotal, '#475569') : '<div style="color:#64748b;font-size:12px">No data</div>'}
+        ${nonIcpEntries.length ? makeBar(nonIcpEntries, nonIcpTotal, '#f87171') : '<div style="color:#94a3b8;font-size:12px">No data</div>'}
       </div>
     </div>`;
 }

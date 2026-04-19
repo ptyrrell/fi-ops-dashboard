@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.10.0"
+APP_VERSION = "v2.10.1"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -128,6 +128,62 @@ def _hs_post(path, body, max_retries=4):
         r.raise_for_status()
         return r.json()
     r.raise_for_status()
+
+# ── AE demo-meeting helpers ──────────────────────────────────────────────────
+
+#   Paul, Natasha, Alan, Tim, Mark — anyone who owns a demo meeting
+DEMO_OWNER_IDS = ("31531133", "31559947", "31558662", "82327472", "104392067")
+
+@_cached("demos_attended", ttl=1800)
+def _fetch_demos_attended(days: int = 180) -> dict:
+    """Fetch demo-meeting counts from HubSpot engagements over the last N days.
+    Returns { attended, no_show, rescheduled, canceled, scheduled, other, total_past }.
+    A demo is ATTENDED when hs_meeting_outcome = COMPLETED and start_time is in the past.
+    """
+    if not HUBSPOT_API_KEY:
+        return {"attended": 0, "no_show": 0, "rescheduled": 0,
+                "canceled": 0, "scheduled": 0, "other": 0, "total_past": 0}
+    since_ms = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
+    now_ms   = int(datetime.now(timezone.utc).timestamp() * 1000)
+    buckets = {"COMPLETED": 0, "NO_SHOW": 0, "RESCHEDULED": 0,
+               "CANCELED":  0, "SCHEDULED": 0}
+    total_past = 0
+    for outcome in list(buckets.keys()) + [None]:
+        filt = [
+            {"propertyName": "hs_meeting_start_time", "operator": "GTE", "value": str(since_ms)},
+            {"propertyName": "hs_meeting_start_time", "operator": "LTE", "value": str(now_ms)},
+            {"propertyName": "hubspot_owner_id", "operator": "IN",
+             "values": list(DEMO_OWNER_IDS)},
+        ]
+        if outcome:
+            filt.append({"propertyName": "hs_meeting_outcome",
+                         "operator": "EQ", "value": outcome})
+        else:
+            filt.append({"propertyName": "hs_meeting_outcome",
+                         "operator": "NOT_HAS_PROPERTY"})
+        try:
+            j = _hs_post("/crm/v3/objects/meetings/search",
+                         {"filterGroups":[{"filters": filt}],
+                          "properties":["hs_meeting_outcome"], "limit": 1})
+            cnt = int(j.get("total", 0))
+        except Exception as e:
+            log.warning(f"demos_attended search failed outcome={outcome}: {e}")
+            cnt = 0
+        if outcome:
+            buckets[outcome] = cnt
+        total_past += cnt
+    other = total_past - sum(buckets.values())
+    return {
+        "attended":    buckets["COMPLETED"],
+        "no_show":     buckets["NO_SHOW"],
+        "rescheduled": buckets["RESCHEDULED"],
+        "canceled":    buckets["CANCELED"],
+        "scheduled":   buckets["SCHEDULED"],  # past-dated but never outcomed
+        "other":       max(0, other),
+        "total_past":  total_past,
+        "window_days": days,
+    }
+
 
 # ── Pipeline / stage constants ────────────────────────────────────────────────
 
@@ -520,7 +576,19 @@ def _fetch_pipeline_quality():
         if v >= warn: return "warn"
         return "bad"
     research_icp_pct = round(icp_ab_cnt/total*100) if total else 0
-    ae_demo_to_won   = round(won/demo_booked*100) if demo_booked else 0
+    try:
+        demo_stats = _fetch_demos_attended(days=180)
+    except Exception as e:
+        log.warning(f"demos_attended fetch failed: {e}")
+        demo_stats = {"attended": 0, "no_show": 0, "scheduled": 0,
+                      "canceled": 0, "rescheduled": 0, "total_past": 0,
+                      "window_days": 180}
+    attended   = demo_stats["attended"]
+    no_show    = demo_stats["no_show"]
+    # Show-rate = attended / (attended + no_show + canceled), if we have signal
+    show_base  = attended + no_show + demo_stats["canceled"] + demo_stats["rescheduled"]
+    show_rate  = round(attended / show_base * 100) if show_base else 0
+    ae_demo_to_won = round(won/attended*100) if attended else 0
     ops_health = {
         "research": {
             "label":"Research Quality","metric":"ICP A+B of researched leads",
@@ -537,11 +605,12 @@ def _fetch_pipeline_quality():
             "sub":f"{sdr_funnel_pct}% of connects reached intro stage",
         },
         "ae": {
-            "label":"AE Conversion","metric":"Demo → Won",
-            "value":f"{ae_demo_to_won}%","score":ae_demo_to_won,
-            "detail":f"{won} wins from {demo_booked} demos booked",
-            "band":_band(ae_demo_to_won, 25, 10),
-            "sub":f"{active} active deals in pipeline",
+            "label":"AE Conversion","metric":"Demos Attended",
+            "value":f"{attended}","score":show_rate,
+            "detail":(f"{attended} attended · {no_show} no-show · {demo_stats['scheduled']} awaiting outcome "
+                      f"({show_rate}% show rate, last {demo_stats['window_days']}d)"),
+            "band":_band(show_rate, 70, 50),
+            "sub":f"{won} wins · {demo_booked} booked in pipeline · {active} active",
         },
         "onboarding": {
             "label":"Onboarding Health","metric":"Customers on track",
@@ -1433,7 +1502,18 @@ def _fetch_icp_audit():
         if v >= warn: return "warn"
         return "bad"
     research_icp_pct = round(icp_ab_cnt/total*100) if total else 0
-    ae_demo_to_won   = round(won/demo_booked*100) if demo_booked else 0
+    try:
+        demo_stats = _fetch_demos_attended(days=180)
+    except Exception as e:
+        log.warning(f"demos_attended fetch failed: {e}")
+        demo_stats = {"attended": 0, "no_show": 0, "scheduled": 0,
+                      "canceled": 0, "rescheduled": 0, "total_past": 0,
+                      "window_days": 180}
+    attended   = demo_stats["attended"]
+    no_show    = demo_stats["no_show"]
+    show_base  = attended + no_show + demo_stats["canceled"] + demo_stats["rescheduled"]
+    show_rate  = round(attended / show_base * 100) if show_base else 0
+    ae_demo_to_won = round(won/attended*100) if attended else 0
     ops_health = {
         "research": {
             "label":"Research Quality","metric":"ICP A+B of researched leads",
@@ -1450,11 +1530,12 @@ def _fetch_icp_audit():
             "sub":f"{sdr_funnel_pct}% of connects reached intro stage",
         },
         "ae": {
-            "label":"AE Conversion","metric":"Demo → Won",
-            "value":f"{ae_demo_to_won}%","score":ae_demo_to_won,
-            "detail":f"{won} wins from {demo_booked} demos booked",
-            "band":_band(ae_demo_to_won, 25, 10),
-            "sub":f"{active} active deals in pipeline",
+            "label":"AE Conversion","metric":"Demos Attended",
+            "value":f"{attended}","score":show_rate,
+            "detail":(f"{attended} attended · {no_show} no-show · {demo_stats['scheduled']} awaiting outcome "
+                      f"({show_rate}% show rate, last {demo_stats['window_days']}d)"),
+            "band":_band(show_rate, 70, 50),
+            "sub":f"{won} wins · {demo_booked} booked in pipeline · {active} active",
         },
         "onboarding": {
             "label":"Onboarding Health","metric":"Customers on track",

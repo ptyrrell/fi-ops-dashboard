@@ -1054,6 +1054,7 @@ function _renderOpsHealth(oh) {
     {key:'research',   icon:'🔬'},
     {key:'sdr',        icon:'📞'},
     {key:'ae',         icon:'🏆'},
+    {key:'demos',      icon:'🎥'},
     {key:'onboarding', icon:'🚀'},
   ];
   let html = `
@@ -1091,11 +1092,42 @@ function _renderOpsHealth(oh) {
   return html;
 }
 
+function _renderInsights(insights, titleSuffix) {
+  if (!insights || !insights.length) return '';
+  const toneBg   = { good:'#0b1f14', warn:'#241b07', bad:'#2a0e0e', info:'#0f1d2d' };
+  const toneBorder = { good:'#10b981', warn:'#f59e0b', bad:'#ef4444', info:'#3b82f6' };
+  const toneText = { good:'#34d399', warn:'#fbbf24', bad:'#f87171', info:'#60a5fa' };
+  let rows = insights.map(ins => {
+    const bg = toneBg[ins.tone] || '#0b1220';
+    const bd = toneBorder[ins.tone] || '#1e293b';
+    const tc = toneText[ins.tone] || '#94a3b8';
+    return `
+      <div style="background:${bg};border-left:3px solid ${bd};padding:12px 14px;border-radius:6px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:${tc}">
+          <span style="font-size:15px">${ins.icon || '💡'}</span>
+          <span>${ins.title || ''}</span>
+        </div>
+        <div style="font-size:12px;color:#cbd5e1;margin-top:4px;line-height:1.5">${ins.body || ''}</div>
+      </div>`;
+  }).join('');
+  return `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header">
+        <div>
+          <div class="card-title">🔎 Insights ${titleSuffix ? '— ' + titleSuffix : ''}</div>
+          <div class="card-subtitle">Computed observations · ranked red → amber → green → info</div>
+        </div>
+      </div>
+      ${rows}
+    </div>`;
+}
+
 function renderPipeline(data) {
   const s = data.summary;
   const noMobCls = pctClass(100 - s.no_mobile_pct, 80, 60);
 
-  let html = _renderOpsHealth(data.ops_health) + `
+  let html = _renderOpsHealth(data.ops_health) +
+             _renderInsights(data.insights, 'Pipeline Quality') + `
   <div class="kpi-grid">
     <div class="kpi blue"><div class="kpi-label">Total Deals</div><div class="kpi-value">${s.total.toLocaleString()}</div><div class="kpi-sub">Tim + Jay pipelines</div></div>
     <div class="kpi teal"><div class="kpi-label">Active</div><div class="kpi-value">${s.active.toLocaleString()}</div><div class="kpi-sub">${Math.round(s.active/s.total*100)}% of pipeline</div></div>
@@ -1292,7 +1324,7 @@ function _renderResearcherTable(totals, recentRows, label) {
         ⚠️ Date parse issue: ${_researcherData.total_rows} rows found but 0 dates parsed from format "${_researcherData.all_rows?.[0]?.date || '?'}". Daily breakdown unavailable.
        </div>` : '';
 
-  let html = debugNote + `
+  let html = debugNote + _renderInsights(_researcherData?.insights, 'Researcher Review') + `
   <div class="kpi-grid">
     <div class="kpi blue"><div class="kpi-label">Leads Added</div><div class="kpi-value">${totalLeads.toLocaleString()}</div><div class="kpi-sub">${periodLabel}</div></div>
     <div class="kpi teal"><div class="kpi-label">With Phone #</div><div class="kpi-value">${totalPhoneCount.toLocaleString()}</div><div class="kpi-sub">${totalPhonePct}% of pipeline</div></div>
@@ -1538,7 +1570,7 @@ function _renderSDRPipeline(hs) {
 
 function _renderSDRCallTable(kpis, mergedRows, label) {
   const hs = _sdrData?.hs_pipeline || {};
-  let html = '';
+  let html = _renderInsights(_sdrData?.insights, 'SDR Review');
 
   // ── HEADLINE KPIs per SDR (new — HubSpot sourced) ─────────────────────────
   const sdrOrder = ["Tim", "Jay"];
@@ -1872,7 +1904,7 @@ function renderOnboarding(data) {
     return;
   }
 
-  let html = `
+  let html = _renderInsights(data.insights, 'Onboarding') + `
   <div class="kpi-grid">
     <div class="kpi blue"><div class="kpi-label">Total Customers</div><div class="kpi-value">${data.total}</div></div>
     <div class="kpi red"><div class="kpi-label">At Risk</div><div class="kpi-value">${data.at_risk.length}</div></div>`;

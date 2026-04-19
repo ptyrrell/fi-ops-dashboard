@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-APP_VERSION = "v2.10.1"
+APP_VERSION = "v2.11.0"
 
 app = Flask(__name__)
 log = logging.getLogger(__name__)
@@ -313,6 +313,263 @@ def _icp_score_note(deal: dict) -> str:
     return "Tier C — no trade keyword or industry signal found in company name"
 
 
+# ── Insights engine ─────────────────────────────────────────────────────────
+#
+# Produces a page-specific list of observations derived from the data already
+# computed for that endpoint. Each insight is { tone, icon, title, body }.
+# Tone drives colour: good=green, warn=amber, bad=red, info=blue.
+# Render order is: bad → warn → good → info.
+
+def _ins(tone: str, icon: str, title: str, body: str) -> dict:
+    return {"tone": tone, "icon": icon, "title": title, "body": body}
+
+
+def _sort_insights(items: list) -> list:
+    order = {"bad": 0, "warn": 1, "good": 2, "info": 3}
+    return sorted(items, key=lambda x: order.get(x.get("tone",""), 9))
+
+
+def _insights_pipeline(summary: dict, ops_health: dict, demo_stats: dict,
+                       stage_counts: dict, tier_ab: int, tier_total: int) -> list:
+    out = []
+    # Research
+    rh = ops_health.get("research", {})
+    if rh.get("band") == "good":
+        out.append(_ins("good","🔬",
+            "Research lead quality is strong",
+            f"{rh.get('detail','')}. Keep the current ICP scoring thresholds."))
+    elif rh.get("band") == "warn":
+        out.append(_ins("warn","🔬",
+            "Research ICP quality is slipping below target",
+            f"{rh.get('detail','')}. Target ≥60% A+B. Review Tamil/Veera's last 2 weeks of leads."))
+    else:
+        out.append(_ins("bad","🔬",
+            "Research ICP quality is below bar",
+            f"{rh.get('detail','')}. <40% A+B is a hard flag — audit the last 100 leads and retrain."))
+
+    # Missing mobile
+    nm = summary.get("no_mobile_pct", 0)
+    if nm >= 30:
+        out.append(_ins("bad","📵",
+            f"{nm}% of leads have no mobile",
+            f"{summary.get('no_mobile',0)} leads cannot be SDR-dialled. "
+            f"Tighten research SOP: require a verified mobile before flagging done."))
+    elif nm >= 15:
+        out.append(_ins("warn","📵",
+            f"{nm}% of leads missing mobile",
+            "Acceptable but trending up — flag to researchers in the weekly review."))
+
+    # SDR
+    sh = ops_health.get("sdr", {})
+    if sh.get("band") == "bad":
+        out.append(_ins("bad","📞",
+            "SDR connect rate is below bar",
+            f"{sh.get('detail','')}. Typical target 35%+. Check dial times & voicemail drop settings."))
+    elif sh.get("band") == "warn":
+        out.append(_ins("warn","📞",
+            "SDR connect rate is sub-target",
+            f"{sh.get('detail','')}. Aim for 35% — shift more dials to 9-11am local."))
+    elif sh.get("band") == "good":
+        out.append(_ins("good","📞",
+            "SDR connect rate is on target",
+            f"{sh.get('detail','')}. Funnel progression: {sh.get('sub','')}."))
+
+    # AE Demo → Won
+    ae = ops_health.get("ae", {})
+    won_pct = ae.get("score", 0)
+    if won_pct < 10:
+        out.append(_ins("bad","🏆",
+            "AE close rate is critically low",
+            f"{ae.get('detail','')}. Under 10% Demo→Won suggests leads aren't qualifying "
+            "or demos aren't landing. Review last 10 no-close demos with AE."))
+    elif won_pct < 25:
+        out.append(_ins("warn","🏆",
+            "AE close rate is sub-target",
+            f"{ae.get('detail','')}. 25%+ is healthy for the FI ICP. "
+            "Audit demo preparation checklist."))
+
+    # Demo attendance
+    show_rate = demo_stats.get("attended", 0)
+    base = demo_stats.get("attended",0) + demo_stats.get("no_show",0) + demo_stats.get("canceled",0)
+    pct = round(demo_stats.get("attended",0) / base * 100) if base else 0
+    waiting = demo_stats.get("scheduled", 0)
+    if demo_stats.get("no_show", 0) >= 10:
+        out.append(_ins("warn","🚫",
+            f"{demo_stats['no_show']} demo no-shows in last {demo_stats.get('window_days',180)}d",
+            "Add a 24h-before SMS + 1h-before calendar reminder; book from SDR hand-off "
+            "with a pre-demo prep email."))
+    if waiting >= 20:
+        out.append(_ins("warn","📋",
+            f"{waiting} past demos have no outcome set",
+            "AE team is not flagging meeting outcomes in HubSpot. "
+            "Add a prompt in the daily stand-up: every meeting gets an outcome inside 24h."))
+    if pct >= 80 and base >= 20:
+        out.append(_ins("good","🎥",
+            f"{pct}% demo show rate (last {demo_stats.get('window_days',180)}d)",
+            f"{demo_stats['attended']} attended of {base} tracked — strong operational rigour."))
+
+    # Onboarding
+    oh = ops_health.get("onboarding", {})
+    if oh.get("band") == "bad":
+        out.append(_ins("bad","🚀",
+            "Onboarding health is at risk",
+            f"{oh.get('detail','')}. {oh.get('sub','')}."))
+    elif oh.get("band") == "warn":
+        out.append(_ins("warn","🚀",
+            "Onboarding has some at-risk accounts",
+            f"{oh.get('sub','')}. Triage in this week's CS stand-up."))
+
+    # Pipeline density / concentration
+    not_interested = sum(n for s,n in stage_counts.items() if "Not Interested" in s or "[" in s and "NI" in s)
+    total_pipeline = sum(stage_counts.values())
+    if total_pipeline and not_interested / total_pipeline > 0.45:
+        out.append(_ins("warn","🎯",
+            f"{round(not_interested/total_pipeline*100)}% of pipeline is 'Not Interested'",
+            "Majority of deals are dead. Reduce pull-down to focus on live Demo-Booked / Future Follow-Up stages."))
+
+    # Win/lead ratio
+    won = summary.get("won", 0)
+    total = summary.get("total", 0)
+    if total > 500 and won < 5:
+        out.append(_ins("info","📊",
+            f"{won} wins from {total} total deals",
+            "Very low won-count for volume — may reflect long sales cycle or sales leak at Demo Attended → Proposal."))
+
+    return _sort_insights(out)
+
+
+def _insights_sdr(sdr_kpis: dict) -> list:
+    out = []
+    if not sdr_kpis:
+        return [_ins("info","ℹ️","No SDR data yet","Sync has not populated call records.")]
+    for sdr, k in sdr_kpis.items():
+        dials = k.get("dials_hs", 0)
+        conn  = k.get("connects_hs", 0)
+        cp    = k.get("connect_pct", 0)
+        intro = k.get("said_intro", 0)
+        convo = k.get("had_convo", 0)
+        asked = k.get("asked_meeting", 0)
+        booked= k.get("booked_meeting", 0)
+        acct  = k.get("accountability_pct", 0)
+        icp_ab= k.get("icp_ab_pct", 0)
+
+        # Data quality: intro > connects is impossible
+        if intro > conn and conn > 0:
+            out.append(_ins("bad","🐛",
+                f"{sdr}: Intro count ({intro}) exceeds connects ({conn})",
+                "Funnel integrity violated — you cannot reach 'Said Intro' without a connect. "
+                "Connects are likely under-counted in HubSpot (Aircall calls with outcome=None). "
+                "Fix: derive connects from funnel flags + duration ≥15s fallback."))
+        if conn == 0 and intro > 0:
+            out.append(_ins("bad","🐛",
+                f"{sdr}: {intro} intros recorded but ZERO connects",
+                "HubSpot call `disposition` is missing/not mapped for this SDR's dialer (likely Aircall). "
+                "Add a disposition parser + duration fallback in sync_sdr_calls.py."))
+
+        # Connect rate
+        if dials > 100:
+            if cp >= 35:
+                out.append(_ins("good","📞",
+                    f"{sdr}: {cp}% connect rate ({conn:,} / {dials:,})",
+                    "On or above the 35% benchmark."))
+            elif cp >= 20:
+                out.append(_ins("warn","📞",
+                    f"{sdr}: {cp}% connect rate — sub-target",
+                    f"{conn:,} connects on {dials:,} dials. Aim 35%."))
+            elif cp > 0:
+                out.append(_ins("bad","📞",
+                    f"{sdr}: {cp}% connect rate — too low",
+                    f"Only {conn:,} connects on {dials:,} dials — dial timing / phone quality issue."))
+
+        # Funnel progression — intro → asked
+        if intro > 0:
+            ask_pct = round(asked / intro * 100)
+            if ask_pct < 10 and intro > 30:
+                out.append(_ins("warn","🎤",
+                    f"{sdr}: {ask_pct}% intros progress to asking for a meeting",
+                    f"{asked} asks on {intro} intros. Script issue — check the call framework."))
+            elif ask_pct >= 25:
+                out.append(_ins("good","🎤",
+                    f"{sdr}: {ask_pct}% intros → asked for meeting",
+                    "Above average. Whatever opener you're using is working."))
+
+        # Bookings
+        if booked == 0 and asked > 10:
+            out.append(_ins("warn","📅",
+                f"{sdr}: {asked} meetings asked, 0 booked",
+                "Asking but not converting — likely objection-handling gap at the close."))
+
+        # ICP quality of who's called
+        if icp_ab < 40 and dials > 100:
+            out.append(_ins("warn","🎯",
+                f"{sdr}: Only {icp_ab}% of dials are ICP A+B",
+                "Research list contains too many off-ICP companies — tighten the upstream filter."))
+        elif icp_ab >= 60:
+            out.append(_ins("good","🎯",
+                f"{sdr}: {icp_ab}% of dials are ICP A+B",
+                "Strong ICP discipline."))
+
+        # Accountability vs Kyle sheet
+        if acct and (acct > 130 or acct < 70):
+            out.append(_ins("warn","📋",
+                f"{sdr}: Sheet↔HubSpot mismatch ({acct}% accountability)",
+                "Dials recorded in the sheet differ from HubSpot by >30%. "
+                "Either undercount in sheet or HubSpot is double-logging Aircall + VOIP."))
+
+    return _sort_insights(out)
+
+
+def _insights_researcher(rows: list) -> list:
+    out = []
+    if not rows:
+        return [_ins("info","ℹ️","No researcher data","Sheet sync has not run yet.")]
+    # totals
+    by_person = {}
+    for r in rows:
+        name = r.get("researcher") or "Unknown"
+        s = by_person.setdefault(name, {"leads":0, "icp_ab":0})
+        s["leads"]  += int(r.get("leads") or 0)
+        s["icp_ab"] += int(r.get("icp_ab") or r.get("icp_ab_hs") or 0)
+    for name, s in by_person.items():
+        if s["leads"] < 10:  # ignore low-volume
+            continue
+        pct = round(s["icp_ab"] / s["leads"] * 100) if s["leads"] else 0
+        if pct >= 60:
+            out.append(_ins("good","🔬",
+                f"{name}: {pct}% ICP A+B ({s['icp_ab']} / {s['leads']})",
+                "On-target research quality."))
+        elif pct >= 40:
+            out.append(_ins("warn","🔬",
+                f"{name}: {pct}% ICP A+B",
+                f"{s['icp_ab']} of {s['leads']} leads — needs tightening."))
+        else:
+            out.append(_ins("bad","🔬",
+                f"{name}: {pct}% ICP A+B — below bar",
+                f"Only {s['icp_ab']} of {s['leads']} leads are A+B. Review sourcing & retrain."))
+    return _sort_insights(out)
+
+
+def _insights_onboarding(summary: dict) -> list:
+    out = []
+    if not summary:
+        return [_ins("info","ℹ️","No onboarding data","Sheet sync has not run yet.")]
+    active  = summary.get("active", 0)
+    at_risk = summary.get("at_risk", 0)
+    if active and at_risk / active >= 0.20:
+        out.append(_ins("bad","🚀",
+            f"{at_risk} of {active} accounts at risk ({round(at_risk/active*100)}%)",
+            "Over 20% at-risk — CS capacity issue or handover gap from Sales."))
+    elif active and at_risk / active >= 0.10:
+        out.append(_ins("warn","🚀",
+            f"{at_risk} at-risk accounts",
+            "Triage in the weekly CS meeting."))
+    elif active:
+        out.append(_ins("good","🚀",
+            f"Only {at_risk} at-risk accounts of {active}",
+            "Onboarding is healthy."))
+    return _sort_insights(out)
+
+
 @_cached("daily_hs_stats", ttl=1800)
 def _fetch_daily_hs_stats() -> dict:
     """
@@ -585,10 +842,9 @@ def _fetch_pipeline_quality():
                       "window_days": 180}
     attended   = demo_stats["attended"]
     no_show    = demo_stats["no_show"]
-    # Show-rate = attended / (attended + no_show + canceled), if we have signal
     show_base  = attended + no_show + demo_stats["canceled"] + demo_stats["rescheduled"]
     show_rate  = round(attended / show_base * 100) if show_base else 0
-    ae_demo_to_won = round(won/attended*100) if attended else 0
+    ae_demo_to_won = round(won/demo_booked*100) if demo_booked else 0
     ops_health = {
         "research": {
             "label":"Research Quality","metric":"ICP A+B of researched leads",
@@ -605,12 +861,19 @@ def _fetch_pipeline_quality():
             "sub":f"{sdr_funnel_pct}% of connects reached intro stage",
         },
         "ae": {
-            "label":"AE Conversion","metric":"Demos Attended",
+            "label":"AE Conversion","metric":"Demo → Won",
+            "value":f"{ae_demo_to_won}%","score":ae_demo_to_won,
+            "detail":f"{won} wins from {demo_booked} demos booked",
+            "band":_band(ae_demo_to_won, 25, 10),
+            "sub":f"{active} active deals in pipeline",
+        },
+        "demos": {
+            "label":"Demos Attended","metric":f"Show rate · last {demo_stats['window_days']}d",
             "value":f"{attended}","score":show_rate,
-            "detail":(f"{attended} attended · {no_show} no-show · {demo_stats['scheduled']} awaiting outcome "
-                      f"({show_rate}% show rate, last {demo_stats['window_days']}d)"),
+            "detail":(f"{attended} attended · {no_show} no-show · "
+                      f"{demo_stats['scheduled']} awaiting outcome ({show_rate}% show rate)"),
             "band":_band(show_rate, 70, 50),
-            "sub":f"{won} wins · {demo_booked} booked in pipeline · {active} active",
+            "sub":f"{demo_booked} booked in pipeline · AE team meetings (HubSpot)",
         },
         "onboarding": {
             "label":"Onboarding Health","metric":"Customers on track",
@@ -634,6 +897,17 @@ def _fetch_pipeline_quality():
             "last_hs_sync":  last_sync,
         },
         "ops_health":    ops_health,
+        "insights":      _insights_pipeline(
+                              summary={
+                                  "total": total, "won": won, "no_mobile": no_mobile,
+                                  "no_mobile_pct": round(no_mobile/total*100) if total else 0,
+                              },
+                              ops_health=ops_health,
+                              demo_stats=demo_stats,
+                              stage_counts=dict(stage_counts.most_common(30)),
+                              tier_ab=icp_ab_cnt,
+                              tier_total=total,
+                          ),
         "by_researcher": researcher_stats,
         "stage_counts":  dict(stage_counts.most_common(14)),
         "won_deals":     sorted(
@@ -864,6 +1138,7 @@ def _fetch_researcher_activity():
         "date_range":      f"{date_range_start} – {date_range_end}",
         "parsed_dates":    parsed_count,
         "total_rows":      len(all_rows_export),
+        "insights":        _insights_researcher(totals),
         "updated_at":      datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
 
@@ -1207,6 +1482,7 @@ def _fetch_sdr_activity():
         "sdr_kpis":       sdr_kpis,
         "all_hs_rows":    all_hs_rows,
         "daily_merged":   merged_rows,
+        "insights":       _insights_sdr(sdr_kpis),
         "updated_at":     datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "data_source":    "HubSpot calls (sdr_calls) + NocoDB pipeline + Google Sheets",
     }
@@ -1329,12 +1605,20 @@ def _fetch_onboarding():
 
     phase_counts = Counter(c.get("Status","Active") or "Active" for c in customers)
 
+    normalized_summary = {
+        "active":    summary_map.get("Active", 0) + summary_map.get("active", 0),
+        "at_risk":   summary_map.get("At Risk", 0) + summary_map.get("at_risk", 0),
+        "completed": summary_map.get("Completed", 0) + summary_map.get("completed", 0),
+        "churned":   summary_map.get("Churned", 0) + summary_map.get("churned", 0),
+    }
     return {
         "customers":    customers,
         "total":        len(customers),
-        "pipeline_summary": summary_map,   # Active:13, At Risk:0, Completed:1, Churned:0
+        "summary":      normalized_summary,
+        "pipeline_summary": summary_map,
         "phase_counts": dict(phase_counts),
         "at_risk":      at_risk,
+        "insights":     _insights_onboarding(normalized_summary),
         "updated_at":   datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
 
@@ -1513,7 +1797,7 @@ def _fetch_icp_audit():
     no_show    = demo_stats["no_show"]
     show_base  = attended + no_show + demo_stats["canceled"] + demo_stats["rescheduled"]
     show_rate  = round(attended / show_base * 100) if show_base else 0
-    ae_demo_to_won = round(won/attended*100) if attended else 0
+    ae_demo_to_won = round(won/demo_booked*100) if demo_booked else 0
     ops_health = {
         "research": {
             "label":"Research Quality","metric":"ICP A+B of researched leads",
@@ -1530,12 +1814,19 @@ def _fetch_icp_audit():
             "sub":f"{sdr_funnel_pct}% of connects reached intro stage",
         },
         "ae": {
-            "label":"AE Conversion","metric":"Demos Attended",
+            "label":"AE Conversion","metric":"Demo → Won",
+            "value":f"{ae_demo_to_won}%","score":ae_demo_to_won,
+            "detail":f"{won} wins from {demo_booked} demos booked",
+            "band":_band(ae_demo_to_won, 25, 10),
+            "sub":f"{active} active deals in pipeline",
+        },
+        "demos": {
+            "label":"Demos Attended","metric":f"Show rate · last {demo_stats['window_days']}d",
             "value":f"{attended}","score":show_rate,
-            "detail":(f"{attended} attended · {no_show} no-show · {demo_stats['scheduled']} awaiting outcome "
-                      f"({show_rate}% show rate, last {demo_stats['window_days']}d)"),
+            "detail":(f"{attended} attended · {no_show} no-show · "
+                      f"{demo_stats['scheduled']} awaiting outcome ({show_rate}% show rate)"),
             "band":_band(show_rate, 70, 50),
-            "sub":f"{won} wins · {demo_booked} booked in pipeline · {active} active",
+            "sub":f"{demo_booked} booked in pipeline · AE team meetings (HubSpot)",
         },
         "onboarding": {
             "label":"Onboarding Health","metric":"Customers on track",
